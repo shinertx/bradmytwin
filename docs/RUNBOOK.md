@@ -25,3 +25,8 @@ docker compose -f infra/docker/docker-compose.yml up --build
 - If webhook failures spike: verify signature secrets and DNS/TLS status.
 - If approvals stall: inspect worker logs and `approval_requests` statuses.
 - If cross-user concern: query `messages`, `approvals`, and `audit_logs` by `person_id`.
+
+## Beta safety toggles
+- Disable unverified web access fast: set `BETA_ALLOW_UNVERIFIED_WEB=false` and restart API.
+- Hard-stop all write actions: set `BETA_KILL_SWITCH_WRITES=true` and restart API.
+- Keep write approval pressure high: set `BETA_STRICT_APPROVALS=true`.

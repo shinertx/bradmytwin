@@ -7,7 +7,15 @@ const router = new TwinRouter();
 const messageService = new MessageService();
 
 export async function webChatRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/web/chat/messages', { preHandler: [app.authenticate] }, async (req, reply) => {
+  app.post('/web/chat/messages', {
+    preHandler: [app.authenticate],
+    config: {
+      rateLimit: {
+        max: 30,
+        timeWindow: '1 minute'
+      }
+    }
+  }, async (req, reply) => {
     const user = req.user as { personId: string };
     const body = req.body as { text: string };
 

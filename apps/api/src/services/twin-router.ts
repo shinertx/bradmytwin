@@ -59,7 +59,8 @@ export class TwinRouter {
 
     const verifiedPerson = await this.tryAutoVerifyPhone(inbound, identity.externalUserKey, person);
 
-    if (!verifiedPerson.phoneVerified) {
+    const allowUnverifiedWeb = inbound.channel === 'WEB' && env.BETA_ALLOW_UNVERIFIED_WEB;
+    if (!verifiedPerson.phoneVerified && !allowUnverifiedWeb) {
       const response =
         inbound.channel === 'TELEGRAM'
           ? 'Please share your phone in Telegram to continue onboarding. Tap attachment, then Contact, and send your own contact card.'
@@ -218,11 +219,29 @@ export class TwinRouter {
         }
       });
 
+      let writeBlockedByKillSwitch = false;
       for (const request of result.toolRequests) {
-        if (request.isWrite && request.actionType && requiresApproval(policy, request.actionType)) {
+        if (request.isWrite && env.BETA_KILL_SWITCH_WRITES) {
+          writeBlockedByKillSwitch = true;
+          await auditService.log({
+            personId,
+            eventType: 'WRITE_BLOCKED_KILL_SWITCH',
+            entityType: 'message',
+            entityId: inboundMessageId,
+            metadata: { toolName: request.toolName, actionType: request.actionType ?? null }
+          });
+          continue;
+        }
+
+        const actionType = request.actionType ?? (request.isWrite ? 'SUBMIT_FORM' : undefined);
+        const approvalRequired = request.isWrite && Boolean(actionType) && (
+          env.BETA_STRICT_APPROVALS || (actionType ? requiresApproval(policy, actionType) : false)
+        );
+
+        if (approvalRequired && actionType) {
           const { approvalId, approvalToken } = await approvalService.create({
             personId,
-            actionType: request.actionType,
+            actionType,
             payload: {
               ...request.payload,
               channel,
@@ -232,7 +251,7 @@ export class TwinRouter {
           });
 
           const approvalUrl = `${env.WEB_BASE_URL}/approvals/${approvalToken}`;
-          const approvalText = `Approval required for ${request.actionType}. Confirm: ${approvalUrl}`;
+          const approvalText = `Approval required for ${actionType}. Confirm: ${approvalUrl}`;
           await this.sendAndPersist(personId, channel, externalUserKey, approvalText);
 
           await auditService.log({
@@ -240,14 +259,16 @@ export class TwinRouter {
             eventType: 'APPROVAL_CREATED',
             entityType: 'approval_request',
             entityId: approvalId,
-            metadata: { actionType: request.actionType }
+            metadata: { actionType }
           });
         }
       }
 
-      const assistant = result.error
-        ? 'I hit an issue while executing your request. Please try again or complete this manually.'
-        : result.assistantText;
+      const assistant = writeBlockedByKillSwitch
+        ? 'Write actions are temporarily disabled while we run beta safety checks. You can still ask read-only questions.'
+        : result.error
+          ? 'I hit an issue while executing your request. Please try again or complete this manually.'
+          : result.assistantText;
       await this.sendAndPersist(personId, channel, externalUserKey, assistant);
       return { text: assistant };
     } finally {

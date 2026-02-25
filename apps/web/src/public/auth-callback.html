@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BuddyClaw Sign-In</title>
+    <script src="/config.js"></script>
+    <style>
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 15% 10%, #d7ebff, transparent 50%), #f8f8f5;
+      }
+      .card {
+        width: min(520px, 92vw);
+        background: #fff;
+        border: 1px solid #d8dde6;
+        border-radius: 16px;
+        padding: 18px;
+        box-shadow: 0 16px 28px rgba(8, 20, 44, 0.08);
+      }
+      h1 { margin: 0 0 10px; font-size: 24px; }
+      p { margin: 0; color: #45566f; }
+      .mono {
+        margin-top: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+        word-break: break-word;
+      }
+      a { color: #0a6bff; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <h1>Signing you in to BuddyClaw...</h1>
+      <p id="message">Please wait while we complete your Google login.</p>
+      <p id="details" class="mono"></p>
+    </section>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      const status = params.get('status');
+      const reason = params.get('reason');
+      const api = window.__BRAD_CONFIG__.API_BASE_URL;
+      const message = document.getElementById('message');
+      const details = document.getElementById('details');
+
+      async function exchange() {
+        if (status === 'error' || !code) {
+          message.textContent = 'Google sign-in failed.';
+          details.innerHTML = `Reason: ${reason || 'missing_exchange_code'}<br><a href="/">Return to login</a>`;
+          return;
+        }
+
+        const res = await fetch(`${api}/auth/login/google/exchange`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const text = await res.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch {}
+
+        if (!res.ok || !data.token) {
+          message.textContent = 'Sign-in exchange failed.';
+          details.innerHTML = `${text}<br><a href="/">Return to login</a>`;
+          return;
+        }
+
+        localStorage.setItem('brad_token', data.token);
+        message.textContent = 'Success. Redirecting to your workspace...';
+        details.textContent = '';
+        setTimeout(() => {
+          window.location.replace('/');
+        }, 400);
+      }
+
+      exchange();
+    </script>
+  </body>
+</html>

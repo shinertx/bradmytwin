@@ -3,6 +3,13 @@ import { z } from 'zod';
 
 dotenv.config();
 
+const envBool = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return value.toLowerCase() === 'true' || value === '1';
+  }
+  return value;
+}, z.boolean());
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(3000),
@@ -11,6 +18,9 @@ const schema = z.object({
   JWT_SECRET: z.string().min(16).default('dev-super-secret-change-me'),
   APP_BASE_URL: z.string().default('http://localhost:3000'),
   WEB_BASE_URL: z.string().default('http://localhost:5173'),
+  BETA_ALLOW_UNVERIFIED_WEB: envBool.default(false),
+  BETA_STRICT_APPROVALS: envBool.default(true),
+  BETA_KILL_SWITCH_WRITES: envBool.default(false),
   OPENCLAW_MODE: z.enum(['stub', 'http', 'cli']).default('stub'),
   OPENCLAW_URL: z.string().optional(),
   OPENCLAW_API_KEY: z.string().optional(),
@@ -33,6 +43,7 @@ const schema = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_LOGIN_REDIRECT_URI: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().optional(),
   KMS_KEY_NAME: z.string().optional(),
   BROWSER_ALLOWLIST: z.string().default('example.com')

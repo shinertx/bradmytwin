@@ -1,6 +1,7 @@
 # Brad.com Omnichannel Digital Twin MVP
 
 Brad.com is a channel-agnostic Digital Twin platform that supports SMS, WhatsApp, Telegram, and Web chat with phone-anchored identity, approval-gated write actions, and per-user isolation.
+The current beta web experience is branded as **BuddyClaw**.
 
 ## What is included
 
@@ -53,6 +54,12 @@ docker compose -f infra/docker/docker-compose.yml up --build
 - `POST /webhooks/telegram`
 - `POST /auth/otp/start`
 - `POST /auth/otp/verify`
+- `POST /auth/phone/start`
+- `POST /auth/phone/verify`
+- `GET /auth/me`
+- `GET /auth/login/google/start`
+- `GET /auth/login/google/callback`
+- `POST /auth/login/google/exchange`
 - `POST /auth/link/google/start`
 - `GET /auth/link/google/callback`
 - `POST /auth/link/apple/start`

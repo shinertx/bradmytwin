@@ -3,91 +3,219 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Brad.com</title>
+    <title>BuddyClaw</title>
     <script src="/config.js"></script>
     <style>
-      :root { --bg: #f4efe6; --ink: #17212d; --card: #fffaf2; --accent: #c45522; --line: #d9c8b0; }
-      body { margin: 0; font-family: "Avenir Next", "Segoe UI", sans-serif; background: radial-gradient(circle at 20% 0%, #fff3d9, var(--bg)); color: var(--ink); }
-      .wrap { max-width: 980px; margin: 32px auto; padding: 0 16px; }
-      .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-      .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: 0 12px 30px rgba(40, 22, 8, 0.08); }
-      h1 { margin: 0 0 10px; font-size: 30px; }
-      h2 { margin: 0 0 8px; font-size: 18px; }
-      input, button, textarea { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #cbb69b; font-size: 14px; }
-      button { background: var(--accent); color: #fff; border: 0; cursor: pointer; margin-top: 8px; }
-      button.secondary { background: #3b5b6f; }
-      #chatLog { max-height: 340px; overflow-y: auto; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
-      .msg { margin: 8px 0; padding: 8px; border-radius: 8px; }
-      .in { background: #e8f2f9; }
-      .out { background: #f9efe4; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-all; }
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+      :root {
+        --bg: #f8f8f5;
+        --ink: #111926;
+        --panel: #ffffff;
+        --muted: #5b6676;
+        --line: #d8dde6;
+        --accent: #0a6bff;
+        --accent-2: #1f9f89;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(1000px 450px at 0% -10%, #d7ebff 0, transparent 65%),
+          radial-gradient(700px 420px at 100% 0%, #daf5ec 0, transparent 65%),
+          var(--bg);
+      }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 16px 44px; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+      .brand { font-family: "Space Grotesk", sans-serif; font-weight: 700; font-size: 31px; margin: 0; }
+      .sub { margin: 7px 0 0; color: var(--muted); }
+      .chipline { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+      .chip { padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--muted); background: #fff; }
+      .shell { margin-top: 18px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 14px 26px rgba(8, 20, 44, 0.06);
+      }
+      .card h2 { margin: 0 0 8px; font-size: 18px; font-family: "Space Grotesk", sans-serif; }
+      .muted { color: var(--muted); }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-word; color: #223041; }
+      input, textarea, button {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid #bcc5d3;
+        font-size: 14px;
+        padding: 11px 12px;
+      }
+      button {
+        border: 0;
+        cursor: pointer;
+        margin-top: 8px;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 600;
+      }
+      button.secondary { background: #2c3f5c; }
+      button.success { background: var(--accent-2); }
+      button.light { background: #fff; color: var(--ink); border: 1px solid var(--line); }
       .row { display: flex; gap: 8px; }
       .row > * { flex: 1; }
-      @media (max-width: 640px) { .wrap { margin: 18px auto; } h1 { font-size: 24px; } }
+      #authState, #connectorState { margin-top: 8px; }
+      #chatLog {
+        max-height: 320px;
+        overflow-y: auto;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        padding: 8px;
+      }
+      .msg { margin: 8px 0; padding: 8px; border-radius: 8px; }
+      .in { background: #eaf2ff; }
+      .out { background: #f3fbf8; }
+      .hidden { display: none; }
+      #phoneBanner {
+        margin-top: 12px;
+        border: 1px dashed #87a1c6;
+        background: #f1f7ff;
+        border-radius: 12px;
+        padding: 10px;
+      }
+      @media (max-width: 700px) {
+        .brand { font-size: 27px; }
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <h1>Brad.com</h1>
-      <p>Phone-anchored Digital Twin across SMS, WhatsApp, Telegram, and Web.</p>
-      <div class="grid">
+      <div class="topbar">
+        <div>
+          <h1 class="brand">BuddyClaw</h1>
+          <p class="sub">Your personal digital twin across web, Telegram, WhatsApp, and SMS.</p>
+          <div class="chipline">
+            <span class="chip">Omnichannel continuity</span>
+            <span class="chip">Approval-first safety</span>
+            <span class="chip">Your assistant, not a generic bot</span>
+          </div>
+        </div>
+        <button id="logout" class="light hidden" style="width: 120px;">Log Out</button>
+      </div>
+
+      <section id="loginShell" class="shell">
         <section class="card">
-          <h2>Phone OTP Login</h2>
+          <h2>Sign In</h2>
+          <p class="muted">Start instantly with Google, or use phone OTP as fallback.</p>
+          <button id="loginGoogle" class="success">Continue with Google</button>
+          <p class="muted" style="margin: 14px 0 4px;">Use phone instead</p>
           <input id="phone" placeholder="+15551234567" />
-          <button id="startOtp">Send OTP</button>
+          <div class="row">
+            <button id="startOtp" class="secondary">Send OTP</button>
+            <button id="verifyOtp">Verify and Sign In</button>
+          </div>
           <input id="otp" placeholder="6-digit code" />
-          <button id="verifyOtp">Verify and Sign In</button>
           <p id="authState" class="mono"></p>
         </section>
-        <section class="card">
-          <h2>Connectors</h2>
-          <button id="connectCalendar" class="secondary">Connect Google Calendar</button>
-          <button id="connectEmail" class="secondary">Connect Gmail</button>
-          <p id="connectorState" class="mono"></p>
-        </section>
-      </div>
-      <div class="grid" style="margin-top: 16px;">
-        <section class="card">
-          <h2>Web Chat</h2>
-          <div id="chatLog"></div>
-          <textarea id="chatInput" rows="3" placeholder="Message your twin"></textarea>
-          <button id="sendChat">Send</button>
-        </section>
-        <section class="card">
-          <h2>Approvals</h2>
-          <button id="loadApprovals" class="secondary">Refresh Approvals</button>
-          <div id="approvals" class="mono"></div>
-        </section>
-      </div>
+      </section>
+
+      <section id="appShell" class="hidden">
+        <div class="shell">
+          <section class="card">
+            <h2>Account</h2>
+            <p id="meState" class="mono"></p>
+            <div id="phoneBanner" class="hidden">
+              <p class="muted" style="margin:0 0 8px;">Verify your phone to unlock cross-channel continuity and recovery.</p>
+              <div class="row">
+                <button id="phoneStart" class="secondary">Send Phone OTP</button>
+                <button id="phoneVerify">Verify Phone</button>
+              </div>
+            </div>
+          </section>
+          <section class="card">
+            <h2>Connectors</h2>
+            <button id="connectCalendar" class="secondary">Connect Google Calendar</button>
+            <button id="connectEmail" class="secondary">Connect Gmail</button>
+            <p id="connectorState" class="mono"></p>
+          </section>
+        </div>
+
+        <div class="shell" style="margin-top: 16px;">
+          <section class="card">
+            <h2>Web Chat</h2>
+            <div id="chatLog"></div>
+            <textarea id="chatInput" rows="3" placeholder="Message your twin"></textarea>
+            <button id="sendChat">Send</button>
+          </section>
+          <section class="card">
+            <h2>Approvals</h2>
+            <button id="loadApprovals" class="secondary">Refresh Approvals</button>
+            <div id="approvals" class="mono"></div>
+          </section>
+        </div>
+      </section>
     </div>
 
     <script>
       const api = window.__BRAD_CONFIG__.API_BASE_URL;
       let token = localStorage.getItem('brad_token') || '';
+      let streamBusy = false;
 
+      const loginShell = document.getElementById('loginShell');
+      const appShell = document.getElementById('appShell');
+      const logoutBtn = document.getElementById('logout');
       const authState = document.getElementById('authState');
+      const meState = document.getElementById('meState');
       const connectorState = document.getElementById('connectorState');
       const chatLog = document.getElementById('chatLog');
+      const phoneBanner = document.getElementById('phoneBanner');
 
       function setState(el, text) { el.textContent = text; }
       function authHeader() { return token ? { Authorization: `Bearer ${token}` } : {}; }
 
       async function call(path, options = {}) {
-        const res = await fetch(`${api}${path}`, {
-          ...options,
-          headers: {
-            'Content-Type': 'application/json',
-            ...(options.headers || {}),
-            ...authHeader()
-          }
-        });
+        const headers = {
+          'Content-Type': 'application/json',
+          ...(options.headers || {}),
+          ...authHeader()
+        };
+        const res = await fetch(`${api}${path}`, { ...options, headers });
         const text = await res.text();
-        try { return { ok: res.ok, data: JSON.parse(text) }; } catch { return { ok: res.ok, data: text }; }
+        try { return { ok: res.ok, status: res.status, data: JSON.parse(text) }; } catch { return { ok: res.ok, status: res.status, data: text }; }
       }
+
+      function setAuthToken(nextToken) {
+        token = nextToken || '';
+        if (token) localStorage.setItem('brad_token', token);
+        else localStorage.removeItem('brad_token');
+      }
+
+      function renderAuthShell() {
+        const authed = Boolean(token);
+        loginShell.classList.toggle('hidden', authed);
+        appShell.classList.toggle('hidden', !authed);
+        logoutBtn.classList.toggle('hidden', !authed);
+      }
+
+      async function refreshMe() {
+        if (!token) return;
+        const out = await call('/auth/me', { method: 'GET' });
+        if (!out.ok) {
+          setAuthToken('');
+          renderAuthShell();
+          return;
+        }
+        setState(meState, JSON.stringify(out.data, null, 2));
+        phoneBanner.classList.toggle('hidden', Boolean(out.data.phoneVerified));
+      }
+
+      document.getElementById('loginGoogle').onclick = () => {
+        window.location.href = `${api}/auth/login/google/start`;
+      };
 
       document.getElementById('startOtp').onclick = async () => {
         const phone = document.getElementById('phone').value.trim();
-        const out = await call('/auth/otp/start', { method: 'POST', body: JSON.stringify({ phone }) });
+        const out = await call('/auth/phone/start', { method: 'POST', body: JSON.stringify({ phone }) });
         setState(authState, JSON.stringify(out.data));
       };
 
@@ -96,10 +224,38 @@
         const code = document.getElementById('otp').value.trim();
         const out = await call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ phone, code }) });
         if (out.ok && out.data.token) {
-          token = out.data.token;
-          localStorage.setItem('brad_token', token);
+          setAuthToken(out.data.token);
+          renderAuthShell();
+          await refreshMe();
+          setState(authState, 'Signed in.');
+          return;
         }
         setState(authState, JSON.stringify(out.data));
+      };
+
+      document.getElementById('phoneStart').onclick = async () => {
+        const phone = document.getElementById('phone').value.trim();
+        const out = await call('/auth/phone/start', { method: 'POST', body: JSON.stringify({ phone }) });
+        setState(authState, JSON.stringify(out.data));
+      };
+
+      document.getElementById('phoneVerify').onclick = async () => {
+        const phone = document.getElementById('phone').value.trim();
+        const code = document.getElementById('otp').value.trim();
+        const out = await call('/auth/phone/verify', { method: 'POST', body: JSON.stringify({ phone, code }) });
+        if (out.ok && out.data.token) {
+          setAuthToken(out.data.token);
+          await refreshMe();
+          setState(authState, 'Phone verified.');
+          return;
+        }
+        setState(authState, JSON.stringify(out.data));
+      };
+
+      document.getElementById('logout').onclick = () => {
+        setAuthToken('');
+        renderAuthShell();
+        setState(authState, '');
       };
 
       document.getElementById('sendChat').onclick = async () => {
@@ -110,33 +266,37 @@
       };
 
       async function refreshChat() {
-        if (!token) return;
-        const res = await fetch(`${api}/web/chat/stream`, { headers: authHeader() });
-        if (!res.ok) return;
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const chunks = buffer.split('\n\n');
-          buffer = chunks.pop() || '';
-          for (const chunk of chunks) {
-            const line = chunk.split('\n').find((l) => l.startsWith('data: '));
-            if (!line) continue;
-            try {
-              const messages = JSON.parse(line.slice(6));
-              chatLog.innerHTML = messages.map((m) => `<div class="msg ${m.direction === 'INBOUND' ? 'in' : 'out'}"><strong>${m.direction}</strong> (${m.channel})<br>${m.body}</div>`).join('');
-              chatLog.scrollTop = chatLog.scrollHeight;
-            } catch {}
+        if (!token || streamBusy) return;
+        streamBusy = true;
+        try {
+          const res = await fetch(`${api}/web/chat/stream`, { headers: authHeader() });
+          if (!res.ok || !res.body) return;
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const chunks = buffer.split('\n\n');
+            buffer = chunks.pop() || '';
+            for (const chunk of chunks) {
+              const line = chunk.split('\n').find((l) => l.startsWith('data: '));
+              if (!line) continue;
+              try {
+                const messages = JSON.parse(line.slice(6));
+                chatLog.innerHTML = messages.map((m) => `<div class="msg ${m.direction === 'INBOUND' ? 'in' : 'out'}"><strong>${m.direction}</strong> (${m.channel})<br>${m.body}</div>`).join('');
+                chatLog.scrollTop = chatLog.scrollHeight;
+              } catch {}
+            }
           }
+        } finally {
+          streamBusy = false;
         }
       }
 
       document.getElementById('loadApprovals').onclick = async () => {
-        const out = await call('/approvals');
+        const out = await call('/approvals', { method: 'GET' });
         document.getElementById('approvals').textContent = JSON.stringify(out.data, null, 2);
       };
 
@@ -152,8 +312,14 @@
         if (out.ok && out.data.authUrl) window.open(out.data.authUrl, '_blank');
       };
 
-      setInterval(refreshChat, 5000);
-      refreshChat();
+      renderAuthShell();
+      if (token) {
+        refreshMe();
+        refreshChat();
+      }
+      setInterval(() => {
+        refreshChat();
+      }, 5000);
     </script>
   </body>
 </html>

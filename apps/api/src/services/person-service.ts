@@ -12,6 +12,10 @@ interface PersonRow {
   email_signature_style: string | null;
 }
 
+interface AuthIdentityRow {
+  person_id: string;
+}
+
 function toPerson(row: PersonRow): Person {
   return {
     id: row.id,
@@ -56,34 +60,13 @@ export class PersonService {
     }
 
     const existingByPhone = input.phoneE164 ? await this.findByPhone(input.phoneE164) : null;
-    const personId = existingByPhone?.id ?? randomUUID();
+    const personId = existingByPhone?.id ?? (await this.createPerson({
+      phoneE164: input.phoneE164,
+      verifiedPhone: input.verifiedPhone
+    }));
 
     if (!existingByPhone) {
-      await query(
-        `INSERT INTO persons (id, phone_e164, phone_verified, onboarding_state)
-         VALUES ($1, $2, $3, $4)`,
-        [
-          personId,
-          input.phoneE164 ?? null,
-          input.verifiedPhone,
-          input.verifiedPhone ? 'ASK_NAME' : 'ASK_NAME'
-        ]
-      );
-
-      await query(
-        `INSERT INTO permissions (person_id, resource, can_read, requires_approval_for_write)
-         VALUES ($1, 'default', true, true)`,
-        [personId]
-      );
-
-      await query(
-        `INSERT INTO skills_enabled (person_id, skill, enabled)
-         VALUES ($1, 'conversation', true),
-                ($1, 'calendar', true),
-                ($1, 'email', true),
-                ($1, 'browser', true)`,
-        [personId]
-      );
+      await this.seedDefaults(personId);
     }
 
     await query(
@@ -105,6 +88,70 @@ export class PersonService {
     await query(
       `UPDATE persons SET phone_e164 = $2, phone_verified = true, updated_at = now() WHERE id = $1`,
       [personId, phoneE164]
+    );
+  }
+
+  async createPerson(input?: { phoneE164?: string; verifiedPhone?: boolean }): Promise<string> {
+    const personId = randomUUID();
+    await query(
+      `INSERT INTO persons (id, phone_e164, phone_verified, onboarding_state)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        personId,
+        input?.phoneE164 ?? null,
+        Boolean(input?.verifiedPhone),
+        'ASK_NAME'
+      ]
+    );
+    return personId;
+  }
+
+  async seedDefaults(personId: string): Promise<void> {
+    await query(
+      `INSERT INTO permissions (person_id, resource, can_read, requires_approval_for_write)
+       VALUES ($1, 'default', true, true)`,
+      [personId]
+    );
+
+    await query(
+      `INSERT INTO skills_enabled (person_id, skill, enabled)
+       VALUES ($1, 'conversation', true),
+              ($1, 'calendar', true),
+              ($1, 'email', true),
+              ($1, 'browser', true)
+       ON CONFLICT (person_id, skill) DO NOTHING`,
+      [personId]
+    );
+  }
+
+  async findPersonIdByAuthIdentity(
+    provider: 'GOOGLE' | 'APPLE' | 'PHONE_OTP',
+    providerUserId: string
+  ): Promise<string | null> {
+    const rows = await query<AuthIdentityRow>(
+      `SELECT person_id
+       FROM auth_identities
+       WHERE provider = $1 AND provider_user_id = $2
+       LIMIT 1`,
+      [provider, providerUserId]
+    );
+    return rows[0]?.person_id ?? null;
+  }
+
+  async upsertAuthIdentity(input: {
+    personId: string;
+    provider: 'GOOGLE' | 'APPLE' | 'PHONE_OTP';
+    providerUserId: string;
+    email?: string;
+  }): Promise<void> {
+    await query(
+      `INSERT INTO auth_identities (person_id, provider, provider_user_id, email_nullable)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (provider, provider_user_id)
+       DO UPDATE SET person_id = excluded.person_id,
+                     email_nullable = excluded.email_nullable,
+                     updated_at = now()`,
+      [input.personId, input.provider, input.providerUserId, input.email ?? null]
     );
   }
 

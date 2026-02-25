@@ -8,6 +8,7 @@
   - In CLI mode, use a dedicated OpenClaw agent profile (`OPENCLAW_CLI_AGENT_ID`) with restrictive tool policy to avoid bypassing Brad approval gates.
 - Approval Service: write-action pause, tokenized approval, idempotent resume.
 - Connector Service: OAuth links and encrypted token storage.
+- Auth Service: Google login OAuth (separate from connector OAuth), phone OTP fallback, identity merge and JWT issuance.
 - Worker: executes approved pending actions and emits completion notifications.
 
 ## Data Isolation
@@ -23,3 +24,8 @@
 5. Runtime is provisioned/reused per user with model profile settings.
 6. Write actions become approval requests.
 7. Worker executes approved requests and marks as executed.
+
+## Beta Mode Flags
+- `BETA_ALLOW_UNVERIFIED_WEB`: allow web onboarding/runtime without phone verification.
+- `BETA_STRICT_APPROVALS`: force approval on all write intents.
+- `BETA_KILL_SWITCH_WRITES`: block all write execution paths at runtime.

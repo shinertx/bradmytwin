@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
+import rateLimit from '@fastify/rate-limit';
 import rawBody from 'fastify-raw-body';
 import { env } from './config/env.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -13,8 +14,8 @@ import { healthRoutes } from './routes/health.js';
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
-    payload: { personId: string; phoneE164: string };
-    user: { personId: string; phoneE164: string };
+    payload: { personId: string; phoneE164?: string };
+    user: { personId: string; phoneE164?: string };
   }
 }
 
@@ -32,6 +33,11 @@ async function buildServer() {
     global: false,
     encoding: 'utf8',
     runFirst: true
+  });
+  await app.register(rateLimit, {
+    global: false,
+    max: 200,
+    timeWindow: '1 minute'
   });
   await app.register(formbody);
   await app.register(jwt, { secret: env.JWT_SECRET });
