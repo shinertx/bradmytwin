@@ -11,6 +11,7 @@ import { MessageService } from './message-service.js';
 import { ModelProfileService } from './model-profile-service.js';
 import { PersonService } from './person-service.js';
 import { RuntimeService } from './runtime-service.js';
+import { normalizePhoneE164Candidate } from '../utils/phone.js';
 
 const personService = new PersonService();
 const messageService = new MessageService();
@@ -91,16 +92,20 @@ export class TwinRouter {
     externalUserKey: string,
     person: Person
   ): Promise<Person> {
-    if (person.phoneVerified || !inbound.phoneE164) {
+    const textPhoneCandidate =
+      inbound.channel === 'TELEGRAM' ? normalizePhoneE164Candidate(inbound.text) : undefined;
+    const verifiedPhoneCandidate = inbound.phoneE164 ?? textPhoneCandidate;
+
+    if (person.phoneVerified || !verifiedPhoneCandidate) {
       return person;
     }
 
-    await personService.markPhoneVerified(person.id, inbound.phoneE164);
+    await personService.markPhoneVerified(person.id, verifiedPhoneCandidate);
     await personService.upsertChannelIdentity({
       personId: person.id,
       channel: inbound.channel,
       externalUserKey,
-      phoneE164: inbound.phoneE164,
+      phoneE164: verifiedPhoneCandidate,
       verifiedPhone: true
     });
 
@@ -109,10 +114,14 @@ export class TwinRouter {
       eventType: 'PHONE_VERIFIED',
       entityType: 'person',
       entityId: person.id,
-      metadata: { channel: inbound.channel, phoneE164: inbound.phoneE164 }
+      metadata: {
+        channel: inbound.channel,
+        phoneE164: verifiedPhoneCandidate,
+        source: inbound.phoneE164 ? 'contact' : 'message_text'
+      }
     });
 
-    return { ...person, phoneVerified: true, phoneE164: inbound.phoneE164 };
+    return { ...person, phoneVerified: true, phoneE164: verifiedPhoneCandidate };
   }
 
   private async handleOnboarding(

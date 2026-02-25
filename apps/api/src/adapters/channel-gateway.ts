@@ -83,10 +83,12 @@ export class TelegramGateway implements ChannelGateway {
 
     const chatId = String(data.message?.chat?.id ?? data.message?.from?.id ?? '');
     const senderId = String(data.message?.from?.id ?? '');
+    const isPrivateChat = Boolean(chatId && senderId && chatId === senderId);
     const contact = data.message?.contact;
+    const contactPhone = normalizePhoneE164Candidate(contact?.phone_number);
     const contactIsSender = contact?.user_id !== undefined && String(contact.user_id) === senderId;
-    const phoneE164 = contactIsSender
-      ? normalizePhoneE164Candidate(contact.phone_number)
+    const phoneE164 = contactPhone && (contactIsSender || (contact?.user_id === undefined && isPrivateChat))
+      ? contactPhone
       : undefined;
 
     return {
