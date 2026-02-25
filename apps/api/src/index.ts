@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
+import rawBody from 'fastify-raw-body';
 import { env } from './config/env.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { authRoutes } from './routes/auth.js';
@@ -26,6 +27,12 @@ declare module 'fastify' {
 async function buildServer() {
   const app = Fastify({ logger: true });
   await app.register(cors, { origin: true });
+  await app.register(rawBody, {
+    field: 'rawBody',
+    global: false,
+    encoding: 'utf8',
+    runFirst: true
+  });
   await app.register(formbody);
   await app.register(jwt, { secret: env.JWT_SECRET });
 

@@ -48,6 +48,8 @@ docker compose -f infra/docker/docker-compose.yml up --build
 
 - `POST /webhooks/twilio/sms`
 - `POST /webhooks/twilio/whatsapp`
+- `GET /webhooks/meta/whatsapp` (Meta verify challenge)
+- `POST /webhooks/meta/whatsapp`
 - `POST /webhooks/telegram`
 - `POST /auth/otp/start`
 - `POST /auth/otp/verify`
@@ -64,7 +66,7 @@ docker compose -f infra/docker/docker-compose.yml up --build
 
 ## Notes
 
-- Twilio and Telegram are safe to run in dev without credentials: outbound messages log to console.
+- Twilio, Meta WhatsApp, and Telegram are safe to run in dev without credentials: outbound messages log to console.
 - Google OAuth callback is scaffolded and stores encrypted token blobs with KMS envelope logic.
 - OpenClaw integration uses an HTTP adapter; fallback stub is active when `OPENCLAW_URL` is not set.
 - OpenClaw can run in three modes via `OPENCLAW_MODE`:

@@ -3,6 +3,8 @@
 ## Inbound webhooks
 - `POST /webhooks/twilio/sms`
 - `POST /webhooks/twilio/whatsapp`
+- `GET /webhooks/meta/whatsapp` (Meta webhook verification)
+- `POST /webhooks/meta/whatsapp`
 - `POST /webhooks/telegram`
 
 ## Web auth

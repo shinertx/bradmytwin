@@ -1,6 +1,6 @@
 import type { ChannelType, InboundMessage, OutboundMessage } from '@brad/domain';
 import { randomUUID } from 'node:crypto';
-import { TelegramClient, TwilioClient } from '@brad/clients';
+import { MetaWhatsAppClient, TelegramClient, TwilioClient } from '@brad/clients';
 import { env } from '../config/env.js';
 import { normalizePhoneE164Candidate } from '../utils/phone.js';
 
@@ -11,6 +11,12 @@ const twilio = new TwilioClient(
   env.TWILIO_WHATSAPP_FROM
 );
 const telegram = new TelegramClient(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_WEBHOOK_SECRET);
+const metaWhatsApp = new MetaWhatsAppClient(
+  env.META_WHATSAPP_ACCESS_TOKEN,
+  env.META_WHATSAPP_PHONE_NUMBER_ID,
+  env.META_GRAPH_API_VERSION,
+  env.META_APP_SECRET
+);
 
 export interface ChannelGateway {
   receiveInbound(payload: unknown): InboundMessage;
@@ -21,6 +27,7 @@ export interface ChannelGateway {
     params?: Record<string, string>;
     signature?: string;
     secret?: string;
+    rawBody?: string;
   }): boolean;
 }
 
@@ -45,7 +52,13 @@ export class TwilioSmsGateway implements ChannelGateway {
     return { externalUserKey: inbound.externalUserKey, phoneE164: inbound.phoneE164 };
   }
 
-  validateSignature(input: { url?: string; params?: Record<string, string>; signature?: string }): boolean {
+  validateSignature(input: {
+    url?: string;
+    params?: Record<string, string>;
+    signature?: string;
+    secret?: string;
+    rawBody?: string;
+  }): boolean {
     return twilio.validateSignature(input.url ?? '', input.params ?? {}, input.signature);
   }
 }
@@ -66,6 +79,90 @@ export class TwilioWhatsAppGateway extends TwilioSmsGateway {
 
   async sendOutbound(message: OutboundMessage): Promise<void> {
     await twilio.sendWhatsApp(message.externalUserKey, message.text);
+  }
+}
+
+interface MetaWhatsAppMessage {
+  id?: string;
+  from?: string;
+  timestamp?: string;
+  type?: string;
+  text?: { body?: string };
+  button?: { text?: string };
+  interactive?: {
+    button_reply?: { title?: string };
+    list_reply?: { title?: string; description?: string };
+  };
+}
+
+interface MetaWhatsAppWebhookPayload {
+  entry?: Array<{
+    changes?: Array<{
+      value?: {
+        messages?: MetaWhatsAppMessage[];
+      };
+    }>;
+  }>;
+}
+
+export class MetaWhatsAppGateway implements ChannelGateway {
+  receiveInbound(payload: unknown): InboundMessage {
+    const message = payload as MetaWhatsAppMessage;
+    const rawFrom = message.from ?? '';
+    const phoneE164 = normalizePhoneE164Candidate(rawFrom);
+    const externalUserKey = phoneE164 ?? rawFrom;
+    const text =
+      message.text?.body ??
+      message.button?.text ??
+      message.interactive?.button_reply?.title ??
+      message.interactive?.list_reply?.title ??
+      '';
+
+    return {
+      channel: 'WHATSAPP',
+      externalUserKey,
+      text,
+      providerMessageId: message.id ?? randomUUID(),
+      phoneE164,
+      metadata: payload as Record<string, unknown>
+    };
+  }
+
+  receiveInboundBatch(payload: unknown): InboundMessage[] {
+    const data = payload as MetaWhatsAppWebhookPayload;
+    const messages: InboundMessage[] = [];
+
+    for (const entry of data.entry ?? []) {
+      for (const change of entry.changes ?? []) {
+        for (const message of change.value?.messages ?? []) {
+          if (!message.from) {
+            continue;
+          }
+          messages.push(this.receiveInbound(message));
+        }
+      }
+    }
+
+    return messages;
+  }
+
+  async sendOutbound(message: OutboundMessage): Promise<void> {
+    const digits = message.externalUserKey.replace(/\D/g, '');
+    await metaWhatsApp.sendTextMessage(digits, message.text);
+  }
+
+  normalizeIdentity(inbound: InboundMessage): { externalUserKey: string; phoneE164?: string } {
+    return { externalUserKey: inbound.externalUserKey, phoneE164: inbound.phoneE164 };
+  }
+
+  validateSignature(input: {
+    url?: string;
+    params?: Record<string, string>;
+    signature?: string;
+    secret?: string;
+    rawBody?: string;
+  }): boolean {
+    return metaWhatsApp.validateWebhookSignature(input.signature, input.rawBody);
   }
 }
 
@@ -109,7 +206,13 @@ export class TelegramGateway implements ChannelGateway {
     return { externalUserKey: inbound.externalUserKey, phoneE164: inbound.phoneE164 };
   }
 
-  validateSignature(input: { secret?: string }): boolean {
+  validateSignature(input: {
+    url?: string;
+    params?: Record<string, string>;
+    signature?: string;
+    secret?: string;
+    rawBody?: string;
+  }): boolean {
     return telegram.validateSecret(input.secret);
   }
 }
@@ -134,7 +237,13 @@ export class WebGateway implements ChannelGateway {
     return { externalUserKey: inbound.externalUserKey };
   }
 
-  validateSignature(): boolean {
+  validateSignature(_input: {
+    url?: string;
+    params?: Record<string, string>;
+    signature?: string;
+    secret?: string;
+    rawBody?: string;
+  }): boolean {
     return true;
   }
 }
@@ -144,6 +253,9 @@ export function gatewayForChannel(channel: ChannelType): ChannelGateway {
     case 'SMS':
       return new TwilioSmsGateway();
     case 'WHATSAPP':
+      if (metaWhatsApp.isConfigured()) {
+        return new MetaWhatsAppGateway();
+      }
       return new TwilioWhatsAppGateway();
     case 'TELEGRAM':
       return new TelegramGateway();
