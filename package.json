@@ -1,0 +1,18 @@
+{
+  "name": "brad-omnichannel-digital-twin",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @brad/domain && npm run build -w @brad/clients && npm run build -w @brad/api && npm run build -w @brad/worker && npm run build -w @brad/web",
+    "dev": "npm run dev -ws --if-present",
+    "test": "npm run test -w @brad/domain && npm run test -w @brad/api --if-present",
+    "lint": "echo 'lint not configured'"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
