@@ -5,6 +5,7 @@
 - Identity Service: canonical `person_id`, channel identities, auth identities.
 - Twin Router: resolves identity, onboarding/runtime decision, routes to OpenClaw.
 - OpenClaw Adapter: supports Gateway CLI mode (`openclaw agent --json`) and HTTP adapter mode (`/v1/...`), with runtime bootstrap/reuse, retries, and policy injection.
+  - In CLI mode, use a dedicated OpenClaw agent profile (`OPENCLAW_CLI_AGENT_ID`) with restrictive tool policy to avoid bypassing Brad approval gates.
 - Approval Service: write-action pause, tokenized approval, idempotent resume.
 - Connector Service: OAuth links and encrypted token storage.
 - Worker: executes approved pending actions and emits completion notifications.

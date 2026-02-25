@@ -49,12 +49,14 @@ export interface OpenClawExecuteInput {
 export interface OpenClawClientOptions {
   mode?: OpenClawMode;
   cliBin?: string;
+  cliAgentId?: string;
   cliTimeoutMs?: number;
 }
 
 export class OpenClawClient {
   private readonly mode: OpenClawMode;
   private readonly cliBin: string;
+  private readonly cliAgentId?: string;
   private readonly cliTimeoutMs: number;
 
   constructor(
@@ -64,6 +66,7 @@ export class OpenClawClient {
   ) {
     this.mode = options.mode ?? (baseUrl ? 'http' : 'stub');
     this.cliBin = options.cliBin ?? 'openclaw';
+    this.cliAgentId = options.cliAgentId;
     this.cliTimeoutMs = options.cliTimeoutMs ?? 90_000;
   }
 
@@ -152,21 +155,14 @@ export class OpenClawClient {
 
   private async executeViaCli(input: OpenClawExecuteInput): Promise<OpenClawResponse> {
     try {
-      const { stdout } = await execFileAsync(
-        this.cliBin,
-        [
-          'agent',
-          '--session-id',
-          input.runtimeId,
-          '--message',
-          input.inputText,
-          '--json'
-        ],
-        {
-          timeout: this.cliTimeoutMs,
-          maxBuffer: 8 * 1024 * 1024
-        }
-      );
+      const args = ['agent', '--session-id', input.runtimeId, '--message', input.inputText, '--json'];
+      if (this.cliAgentId) {
+        args.splice(1, 0, '--agent', this.cliAgentId);
+      }
+      const { stdout } = await execFileAsync(this.cliBin, args, {
+        timeout: this.cliTimeoutMs,
+        maxBuffer: 8 * 1024 * 1024
+      });
 
       const parsed = this.extractJson(stdout);
       const payloads = Array.isArray(parsed?.result?.payloads) ? parsed.result.payloads : [];

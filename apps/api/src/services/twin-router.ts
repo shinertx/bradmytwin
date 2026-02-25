@@ -23,6 +23,7 @@ const modelProfileService = new ModelProfileService();
 const openclaw = new OpenClawClient(env.OPENCLAW_URL, env.OPENCLAW_API_KEY, {
   mode: env.OPENCLAW_MODE,
   cliBin: env.OPENCLAW_CLI_BIN,
+  cliAgentId: env.OPENCLAW_CLI_AGENT_ID,
   cliTimeoutMs: env.OPENCLAW_CLI_TIMEOUT_MS
 });
 

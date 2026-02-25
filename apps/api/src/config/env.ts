@@ -15,6 +15,7 @@ const schema = z.object({
   OPENCLAW_URL: z.string().optional(),
   OPENCLAW_API_KEY: z.string().optional(),
   OPENCLAW_CLI_BIN: z.string().default('openclaw'),
+  OPENCLAW_CLI_AGENT_ID: z.string().optional(),
   OPENCLAW_CLI_TIMEOUT_MS: z.coerce.number().default(90000),
   OPENCLAW_MODEL_DEFAULT: z.string().default('gpt-4.1'),
   OPENCLAW_MODEL_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),

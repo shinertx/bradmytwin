@@ -71,5 +71,6 @@ docker compose -f infra/docker/docker-compose.yml up --build
   - `stub`: local deterministic fallback (default for dev)
   - `http`: calls external `/v1/...` OpenClaw HTTP adapter
   - `cli`: calls local `openclaw agent --json` via CLI (best for Gateway-based deployments)
+- For `cli` mode, set `OPENCLAW_CLI_AGENT_ID` to a locked-down OpenClaw agent profile (recommended: deny `group:openclaw` tools and let Brad app handle approvals).
 
 See [`docs`](./docs) for architecture, security, API, and runbook details.
