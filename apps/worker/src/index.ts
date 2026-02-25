@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
 import { Pool } from 'pg';
-import { TwilioClient, TelegramClient } from '@brad/clients';
+import { MetaWhatsAppClient, TelegramClient, TwilioClient } from '@brad/clients';
 
 dotenv.config();
 
@@ -13,6 +13,10 @@ const env = z
     TWILIO_AUTH_TOKEN: z.string().optional(),
     TWILIO_SMS_FROM: z.string().optional(),
     TWILIO_WHATSAPP_FROM: z.string().optional(),
+    META_WHATSAPP_ACCESS_TOKEN: z.string().optional(),
+    META_WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
+    META_GRAPH_API_VERSION: z.string().default('v22.0'),
+    META_APP_SECRET: z.string().optional(),
     TELEGRAM_BOT_TOKEN: z.string().optional()
   })
   .parse(process.env);
@@ -23,6 +27,12 @@ const twilio = new TwilioClient(
   env.TWILIO_AUTH_TOKEN,
   env.TWILIO_SMS_FROM,
   env.TWILIO_WHATSAPP_FROM
+);
+const metaWhatsApp = new MetaWhatsAppClient(
+  env.META_WHATSAPP_ACCESS_TOKEN,
+  env.META_WHATSAPP_PHONE_NUMBER_ID,
+  env.META_GRAPH_API_VERSION,
+  env.META_APP_SECRET
 );
 const telegram = new TelegramClient(env.TELEGRAM_BOT_TOKEN, undefined);
 
@@ -53,7 +63,11 @@ async function sendCompletion(row: ApprovalRow): Promise<void> {
   if (channel === 'SMS') {
     await twilio.sendSms(key, text);
   } else if (channel === 'WHATSAPP') {
-    await twilio.sendWhatsApp(key, text);
+    if (metaWhatsApp.isConfigured()) {
+      await metaWhatsApp.sendTextMessage(key.replace(/\D/g, ''), text);
+    } else {
+      await twilio.sendWhatsApp(key, text);
+    }
   } else if (channel === 'TELEGRAM') {
     await telegram.sendMessage(key, text);
   }
