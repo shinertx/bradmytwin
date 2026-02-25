@@ -4,7 +4,7 @@
 - Channel Gateways: SMS/WhatsApp (Twilio), Telegram (Bot API), Web.
 - Identity Service: canonical `person_id`, channel identities, auth identities.
 - Twin Router: resolves identity, onboarding/runtime decision, routes to OpenClaw.
-- OpenClaw Adapter: runtime bootstrap (`/v1/runtimes/ensure`) and execution (`/v1/twin/execute`), retries, policy injection.
+- OpenClaw Adapter: supports Gateway CLI mode (`openclaw agent --json`) and HTTP adapter mode (`/v1/...`), with runtime bootstrap/reuse, retries, and policy injection.
 - Approval Service: write-action pause, tokenized approval, idempotent resume.
 - Connector Service: OAuth links and encrypted token storage.
 - Worker: executes approved pending actions and emits completion notifications.

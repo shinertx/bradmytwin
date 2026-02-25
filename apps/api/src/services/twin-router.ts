@@ -20,7 +20,11 @@ const connectorService = new ConnectorService();
 const runtimeService = new RuntimeService();
 const lockService = new LockService();
 const modelProfileService = new ModelProfileService();
-const openclaw = new OpenClawClient(env.OPENCLAW_URL, env.OPENCLAW_API_KEY);
+const openclaw = new OpenClawClient(env.OPENCLAW_URL, env.OPENCLAW_API_KEY, {
+  mode: env.OPENCLAW_MODE,
+  cliBin: env.OPENCLAW_CLI_BIN,
+  cliTimeoutMs: env.OPENCLAW_CLI_TIMEOUT_MS
+});
 
 export class TwinRouter {
   async handleInbound(inbound: InboundMessage): Promise<{ text: string }> {

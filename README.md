@@ -67,5 +67,9 @@ docker compose -f infra/docker/docker-compose.yml up --build
 - Twilio and Telegram are safe to run in dev without credentials: outbound messages log to console.
 - Google OAuth callback is scaffolded and stores encrypted token blobs with KMS envelope logic.
 - OpenClaw integration uses an HTTP adapter; fallback stub is active when `OPENCLAW_URL` is not set.
+- OpenClaw can run in three modes via `OPENCLAW_MODE`:
+  - `stub`: local deterministic fallback (default for dev)
+  - `http`: calls external `/v1/...` OpenClaw HTTP adapter
+  - `cli`: calls local `openclaw agent --json` via CLI (best for Gateway-based deployments)
 
 See [`docs`](./docs) for architecture, security, API, and runbook details.
