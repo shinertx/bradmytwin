@@ -1,6 +1,6 @@
 import { OpenClawClient } from '@brad/clients';
 import { advanceOnboarding, getOnboardingPrompt, requiresApproval } from '@brad/domain';
-import type { ChannelType, InboundMessage } from '@brad/domain';
+import type { ChannelType, InboundMessage, Person } from '@brad/domain';
 import { env } from '../config/env.js';
 import { gatewayForChannel } from '../adapters/channel-gateway.js';
 import { AuditService } from './audit-service.js';
@@ -56,17 +56,63 @@ export class TwinRouter {
       metadata: { channel: inbound.channel }
     });
 
-    if (!person.phoneVerified) {
-      const response = 'Please verify your phone in web login to continue onboarding.';
+    const verifiedPerson = await this.tryAutoVerifyPhone(inbound, identity.externalUserKey, person);
+
+    if (!verifiedPerson.phoneVerified) {
+      const response =
+        inbound.channel === 'TELEGRAM'
+          ? 'Please share your phone in Telegram to continue onboarding. Tap attachment, then Contact, and send your own contact card.'
+          : 'Please verify your phone in web login to continue onboarding.';
       await this.sendAndPersist(person.id, inbound.channel, identity.externalUserKey, response);
       return { text: response };
     }
 
-    if (person.onboardingState !== 'ACTIVE') {
-      return await this.handleOnboarding(person.id, person.onboardingState, inbound.text, inbound.channel, identity.externalUserKey);
+    if (verifiedPerson.onboardingState !== 'ACTIVE') {
+      return await this.handleOnboarding(
+        verifiedPerson.id,
+        verifiedPerson.onboardingState,
+        inbound.text,
+        inbound.channel,
+        identity.externalUserKey
+      );
     }
 
-    return await this.handleRuntime(person.id, inbound.text, inbound.channel, identity.externalUserKey, inboundMessageId);
+    return await this.handleRuntime(
+      verifiedPerson.id,
+      inbound.text,
+      inbound.channel,
+      identity.externalUserKey,
+      inboundMessageId
+    );
+  }
+
+  private async tryAutoVerifyPhone(
+    inbound: InboundMessage,
+    externalUserKey: string,
+    person: Person
+  ): Promise<Person> {
+    if (person.phoneVerified || !inbound.phoneE164) {
+      return person;
+    }
+
+    await personService.markPhoneVerified(person.id, inbound.phoneE164);
+    await personService.upsertChannelIdentity({
+      personId: person.id,
+      channel: inbound.channel,
+      externalUserKey,
+      phoneE164: inbound.phoneE164,
+      verifiedPhone: true
+    });
+
+    await auditService.log({
+      personId: person.id,
+      eventType: 'PHONE_VERIFIED',
+      entityType: 'person',
+      entityId: person.id,
+      metadata: { channel: inbound.channel, phoneE164: inbound.phoneE164 }
+    });
+
+    return { ...person, phoneVerified: true, phoneE164: inbound.phoneE164 };
   }
 
   private async handleOnboarding(

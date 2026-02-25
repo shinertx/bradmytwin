@@ -2,6 +2,7 @@ import type { ChannelType, InboundMessage, OutboundMessage } from '@brad/domain'
 import { randomUUID } from 'node:crypto';
 import { TelegramClient, TwilioClient } from '@brad/clients';
 import { env } from '../config/env.js';
+import { normalizePhoneE164Candidate } from '../utils/phone.js';
 
 const twilio = new TwilioClient(
   env.TWILIO_ACCOUNT_SID,
@@ -76,16 +77,24 @@ export class TelegramGateway implements ChannelGateway {
         text?: string;
         chat?: { id: number | string };
         from?: { id?: number | string };
+        contact?: { user_id?: number | string; phone_number?: string };
       };
     };
 
     const chatId = String(data.message?.chat?.id ?? data.message?.from?.id ?? '');
+    const senderId = String(data.message?.from?.id ?? '');
+    const contact = data.message?.contact;
+    const contactIsSender = contact?.user_id !== undefined && String(contact.user_id) === senderId;
+    const phoneE164 = contactIsSender
+      ? normalizePhoneE164Candidate(contact.phone_number)
+      : undefined;
 
     return {
       channel: 'TELEGRAM',
       externalUserKey: chatId,
       text: data.message?.text ?? '',
       providerMessageId: String(data.message?.message_id ?? randomUUID()),
+      phoneE164,
       metadata: payload as Record<string, unknown>
     };
   }
@@ -95,7 +104,7 @@ export class TelegramGateway implements ChannelGateway {
   }
 
   normalizeIdentity(inbound: InboundMessage): { externalUserKey: string; phoneE164?: string } {
-    return { externalUserKey: inbound.externalUserKey };
+    return { externalUserKey: inbound.externalUserKey, phoneE164: inbound.phoneE164 };
   }
 
   validateSignature(input: { secret?: string }): boolean {
