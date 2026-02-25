@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://belkin-flexible-redhead-dollar.trycloudflare.com/$1"
+    }
+  ]
+}
