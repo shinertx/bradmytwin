@@ -167,11 +167,11 @@ export class OpenClawClient {
       temperature: input.temperature,
       max_output_tokens: input.maxTokens,
       user: input.userId,
-      metadata: {
+      metadata: this.normalizeMetadata({
         ...(input.metadata ?? {}),
         run_id: input.runId,
         session_id: input.sessionId
-      },
+      }),
       tools: input.tools.map((tool) => this.toResponsesTool(tool))
     };
 
@@ -426,5 +426,28 @@ export class OpenClawClient {
     } catch {
       return {};
     }
+  }
+
+  private normalizeMetadata(raw: Record<string, unknown>): Record<string, string> {
+    const normalized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (value === undefined) {
+        continue;
+      }
+      if (typeof value === 'string') {
+        normalized[key] = value;
+        continue;
+      }
+      if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+        normalized[key] = String(value);
+        continue;
+      }
+      try {
+        normalized[key] = JSON.stringify(value);
+      } catch {
+        normalized[key] = String(value);
+      }
+    }
+    return normalized;
   }
 }
