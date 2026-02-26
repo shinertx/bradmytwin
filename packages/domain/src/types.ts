@@ -65,3 +65,43 @@ export interface OpenClawResponse {
   toolResults?: Record<string, unknown>[];
   error?: string;
 }
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface OpenClawToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface OpenClawToolOutput {
+  callId: string;
+  output: Record<string, unknown>;
+}
+
+export interface OpenClawTurnInput {
+  runId: string;
+  sessionId: string;
+  userId: string;
+  inputText?: string;
+  previousResponseId?: string;
+  toolOutputs?: OpenClawToolOutput[];
+  tools: ToolDefinition[];
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface OpenClawTurnResult {
+  runId: string;
+  sessionId: string;
+  responseId: string;
+  assistantText: string;
+  toolCalls: OpenClawToolCall[];
+  error?: string;
+}

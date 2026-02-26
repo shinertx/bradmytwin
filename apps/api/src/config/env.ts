@@ -21,7 +21,7 @@ const schema = z.object({
   BETA_ALLOW_UNVERIFIED_WEB: envBool.default(false),
   BETA_STRICT_APPROVALS: envBool.default(true),
   BETA_KILL_SWITCH_WRITES: envBool.default(false),
-  OPENCLAW_MODE: z.enum(['stub', 'http', 'cli']).default('stub'),
+  OPENCLAW_MODE: z.enum(['stub', 'http', 'cli']).default('http'),
   OPENCLAW_URL: z.string().optional(),
   OPENCLAW_API_KEY: z.string().optional(),
   OPENCLAW_CLI_BIN: z.string().default('openclaw'),

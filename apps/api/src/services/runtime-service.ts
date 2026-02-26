@@ -1,28 +1,90 @@
 import { randomUUID } from 'node:crypto';
+import { query } from './db.js';
 import { redis } from './redis.js';
 
+export interface RuntimeContext {
+  sessionId: string;
+  responseId?: string;
+}
+
+const TTL_SECONDS = 10 * 60;
+
 export class RuntimeService {
-  async ensureRuntimeId(personId: string, createRuntime: () => Promise<string>): Promise<string> {
-    const key = `runtime:person:${personId}`;
+  async ensureRuntimeContext(
+    personId: string,
+    createContext: () => Promise<RuntimeContext>
+  ): Promise<RuntimeContext> {
+    const key = this.key(personId);
     const existing = await redis.get(key);
     if (existing) {
-      await redis.expire(key, 10 * 60);
-      return existing;
+      const parsed = this.parseContext(existing);
+      await redis.expire(key, TTL_SECONDS);
+      await this.upsertSessionRow(personId, parsed.sessionId, parsed.responseId);
+      return parsed;
     }
 
-    const runtimeId = await createRuntime();
-    await redis.setex(key, 10 * 60, runtimeId);
-    return runtimeId;
+    const context = await createContext();
+    await redis.setex(key, TTL_SECONDS, JSON.stringify(context));
+    await this.upsertSessionRow(personId, context.sessionId, context.responseId);
+    return context;
   }
 
-  async rotateRuntimeId(personId: string): Promise<string> {
-    const key = `runtime:person:${personId}`;
-    const runtimeId = randomUUID();
-    await redis.setex(key, 10 * 60, runtimeId);
-    return runtimeId;
+  async updateResponseId(personId: string, responseId: string): Promise<void> {
+    const key = this.key(personId);
+    const existing = await redis.get(key);
+    const parsed = existing ? this.parseContext(existing) : { sessionId: randomUUID() };
+    parsed.responseId = responseId;
+    await redis.setex(key, TTL_SECONDS, JSON.stringify(parsed));
+    await this.upsertSessionRow(personId, parsed.sessionId, parsed.responseId);
   }
 
   async touchRuntime(personId: string): Promise<void> {
-    await redis.expire(`runtime:person:${personId}`, 10 * 60);
+    await redis.expire(this.key(personId), TTL_SECONDS);
+  }
+
+  async ensureRuntimeId(personId: string, createRuntime: () => Promise<string>): Promise<string> {
+    const context = await this.ensureRuntimeContext(personId, async () => ({
+      sessionId: await createRuntime()
+    }));
+    return context.sessionId;
+  }
+
+  async rotateRuntimeId(personId: string): Promise<string> {
+    const sessionId = randomUUID();
+    await redis.setex(this.key(personId), TTL_SECONDS, JSON.stringify({ sessionId }));
+    await this.upsertSessionRow(personId, sessionId, undefined);
+    return sessionId;
+  }
+
+  private key(personId: string): string {
+    return `runtime:person:${personId}`;
+  }
+
+  private parseContext(raw: string): RuntimeContext {
+    try {
+      const parsed = JSON.parse(raw) as RuntimeContext;
+      if (parsed && typeof parsed === 'object' && typeof parsed.sessionId === 'string') {
+        return parsed;
+      }
+    } catch {
+      // keep fallback below
+    }
+
+    // Backward compatibility for old runtime key shape that stored session id as raw string.
+    return { sessionId: raw };
+  }
+
+  private async upsertSessionRow(personId: string, sessionId: string, responseId?: string): Promise<void> {
+    await query(
+      `INSERT INTO runtime_sessions (id, person_id, status, last_active_at, expires_at, openclaw_session_id, last_response_id)
+       VALUES ($1, $2, 'ACTIVE', now(), now() + interval '10 minutes', $3, $4)
+       ON CONFLICT (openclaw_session_id)
+       DO UPDATE SET person_id = excluded.person_id,
+                     status = 'ACTIVE',
+                     last_active_at = now(),
+                     expires_at = now() + interval '10 minutes',
+                     last_response_id = COALESCE(excluded.last_response_id, runtime_sessions.last_response_id)`,
+      [randomUUID(), personId, sessionId, responseId ?? null]
+    );
   }
 }

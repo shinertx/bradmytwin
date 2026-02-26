@@ -31,7 +31,13 @@ export async function webChatRoutes(app: FastifyInstance): Promise<void> {
       metadata: { source: 'web' }
     });
 
-    return reply.send({ ok: true, reply: result.text });
+    return reply.send({
+      ok: true,
+      reply: result.text,
+      pendingApprovals: result.pendingApprovals ?? [],
+      runId: result.runId ?? null,
+      sessionId: result.sessionId ?? null
+    });
   });
 
   app.get('/web/chat/stream', { preHandler: [app.authenticate] }, async (req, reply) => {

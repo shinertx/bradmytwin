@@ -14,8 +14,12 @@
 - `audit_logs`
 - `runtime_sessions`
 - `model_profiles`
+- `reminders`
+- `tasks`
 
-Schema is defined in [`infra/postgres/init/001_schema.sql`](../infra/postgres/init/001_schema.sql).
+Schema is defined in:
+- [`infra/postgres/init/001_schema.sql`](../infra/postgres/init/001_schema.sql)
+- [`infra/postgres/init/002_deep_openclaw.sql`](../infra/postgres/init/002_deep_openclaw.sql)
 
 ## Redis Keys
 - `otp:phone:{e164}` OTP codes
