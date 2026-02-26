@@ -171,9 +171,10 @@ export class OpenClawClient {
         .filter(Boolean)
         .join('\n')
         .trim();
+      const normalizedAssistantText = this.normalizeAssistantText(assistantText);
 
       return {
-        assistantText: assistantText || 'I processed your request.',
+        assistantText: normalizedAssistantText || 'I processed your request.',
         toolRequests: this.inferToolRequests(input.inputText)
       };
     } catch (error) {
@@ -221,6 +222,38 @@ export class OpenClawClient {
     }
 
     return requests;
+  }
+
+  private normalizeAssistantText(text: string): string {
+    if (!text) {
+      return text;
+    }
+
+    const trimmed = text.trim();
+    if (!(trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      return text;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as { name?: unknown };
+      const name = typeof parsed.name === 'string' ? parsed.name.toLowerCase() : '';
+
+      if (name.includes('cron') || name.includes('calendar')) {
+        return 'I can help schedule that. I will request approval before writing to your calendar.';
+      }
+
+      if (name.includes('gmail') || name.includes('email')) {
+        return 'I can draft that email. I will request approval before sending.';
+      }
+
+      if (name.includes('browser') || name.includes('form')) {
+        return 'I can prepare that form action. I will request approval before submission.';
+      }
+
+      return 'I processed your request.';
+    } catch {
+      return text;
+    }
   }
 
   private extractJson(output: string): Record<string, any> {
