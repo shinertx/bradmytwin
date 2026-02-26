@@ -76,14 +76,19 @@ export class RuntimeService {
 
   private async upsertSessionRow(personId: string, sessionId: string, responseId?: string): Promise<void> {
     await query(
-      `INSERT INTO runtime_sessions (id, person_id, status, last_active_at, expires_at, openclaw_session_id, last_response_id)
-       VALUES ($1, $2, 'ACTIVE', now(), now() + interval '10 minutes', $3, $4)
-       ON CONFLICT (openclaw_session_id)
-       DO UPDATE SET person_id = excluded.person_id,
-                     status = 'ACTIVE',
-                     last_active_at = now(),
-                     expires_at = now() + interval '10 minutes',
-                     last_response_id = COALESCE(excluded.last_response_id, runtime_sessions.last_response_id)`,
+      `WITH updated AS (
+         UPDATE runtime_sessions
+         SET person_id = $2,
+             status = 'ACTIVE',
+             last_active_at = now(),
+             expires_at = now() + interval '10 minutes',
+             last_response_id = COALESCE($4, runtime_sessions.last_response_id)
+         WHERE openclaw_session_id = $3
+         RETURNING id
+       )
+       INSERT INTO runtime_sessions (id, person_id, status, last_active_at, expires_at, openclaw_session_id, last_response_id)
+       SELECT $1, $2, 'ACTIVE', now(), now() + interval '10 minutes', $3, $4
+       WHERE NOT EXISTS (SELECT 1 FROM updated)`,
       [randomUUID(), personId, sessionId, responseId ?? null]
     );
   }
