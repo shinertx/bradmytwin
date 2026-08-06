@@ -76,6 +76,7 @@ The non-bundled `brad-managed-kimi` plugin must be loaded only on a supported ma
     "managedAgentId": "main",
     "managedMainAccountDigest": "<sha256-account-fingerprint>",
     "managedOwnerIdentity": "kimi-claw:main",
+    "managedTelegramBindingDigest": "<sha256-telegram-v1-account-owner-private-chat>",
     "managedTelegramOwnerDigest": "<sha256-paired-telegram-owner-id>",
     "modelProvider": "kimi-coding",
     "model": "k2p6",
@@ -84,8 +85,8 @@ The non-bundled `brad-managed-kimi` plugin must be loaded only on a supported ma
 }
 ```
 
-Use `recoveryEnabled: false` in isolated staging. The guarded candidate uses `true` only after exact account fingerprinting, cross-context claim persistence, stale-run rejection, and recovery tests pass. It must not consume Telegram.
+Use `recoveryEnabled: false` in isolated staging. The production bridge uses `true` only after exact account fingerprinting, cross-context claim persistence, stale-run rejection, and recovery tests pass. Telegram run fallback must require the exact authoritative provider, user trigger, command-owner verdict, three matching canonical sender fields, a private chat equal to that sender, the selected bot account, the exact managed-main session, and non-conflicting run IDs. The binding fingerprint is SHA-256 over `telegram:v1:<account>:<owner>:<private-chat>`.
 
-The bridge uses the provider message ID for durable deduplication, requires an explicit trusted-owner signal, settles the executive response in Postgres before final delivery, blocks all unclaimed tools, renews live claims, and reschedules expired work into the original OpenClaw session. The recovery claim token stays in plugin memory and is rotated to the exact resumed run before model execution.
+The bridge uses the provider message ID for durable deduplication whenever an inbound hook emits it. The synthesized managed-Telegram fallback has no provider update ID and therefore uses the stable OpenClaw run ID; replay of one Telegram update under a different run ID remains a live cutover proof gate. The bridge requires an explicit trusted-owner signal, settles the executive response in Postgres before final delivery, blocks all unclaimed tools, renews live claims, and reschedules expired work into the original OpenClaw session. The recovery claim token stays in plugin memory and is rotated to the exact resumed run before model execution.
 
 Kimi's current official K3 identity is `kimi-coding/k3` with a `1.0m` context. The current proven candidate remains `kimi-coding/k2p6`; a live K3 canary reached the Kimi account-plan suspension gate and was rolled back. Do not retry K3 or authorize a purchase without owner approval, and do not label the candidate K3 until a fresh response and durable objective prove the upgraded model.

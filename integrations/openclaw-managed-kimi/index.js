@@ -17,6 +17,7 @@ const CONFIG_KEYS = new Set([
   'managedAgentId',
   'managedMainAccountDigest',
   'managedOwnerIdentity',
+  'managedTelegramBindingDigest',
   'managedTelegramOwnerDigest',
   'modelProvider',
   'model',
@@ -173,6 +174,12 @@ function parsePluginConfig(pluginConfig) {
       /^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._:-]*$/,
       384
     ).toLowerCase(),
+    managedTelegramBindingDigest: configString(
+      pluginConfig,
+      'managedTelegramBindingDigest',
+      /^[0-9a-f]{64}$/,
+      64
+    ).toLowerCase(),
     managedTelegramOwnerDigest: configString(
       pluginConfig,
       'managedTelegramOwnerDigest',
@@ -203,6 +210,29 @@ function boundedContextValues(values, maxLength) {
   return [...new Set(values
     .map((value) => normalizedString(value))
     .filter((value) => value && value.length <= maxLength))];
+}
+
+function exactTelegramId(value) {
+  return typeof value === 'string'
+    && value.length <= 20
+    && value === value.trim()
+    && /^[1-9][0-9]{4,19}$/.test(value)
+    ? value
+    : '';
+}
+
+function exactAccountId(value) {
+  return typeof value === 'string'
+    && value.length <= 128
+    && value === value.trim()
+    && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
+    ? value
+    : '';
+}
+
+function optionalExact(value, expected, normalizer = (candidate) => candidate) {
+  if (value === undefined || value === null) return true;
+  return normalizer(value) === expected;
 }
 
 function matchedManagedPrincipal(identity, providers, principals) {
@@ -259,6 +289,10 @@ function safeOwnerContextShape(event, ctx, config) {
     `event_account_matches_managed_digest=${promptDigest(event?.accountId) === config.managedMainAccountDigest}`,
     `event_sender_matches_telegram_digest=${promptDigest(event?.senderId) === config.managedTelegramOwnerDigest}`,
     `ctx_sender_matches_telegram_digest=${promptDigest(ctx?.senderId) === config.managedTelegramOwnerDigest}`,
+    `telegram_binding_matches=${promptDigest(`telegram:v1:${event?.accountId}:${event?.senderId}:${chat?.id}`) === config.managedTelegramBindingDigest}`,
+    `provider_is_exact_telegram=${ctx?.messageProvider === 'telegram'}`,
+    `trigger_is_user=${ctx?.trigger === 'user'}`,
+    `private_chat_matches_sender=${exactTelegramId(chat?.id) === exactTelegramId(event?.senderId)}`,
     `session_is_boot=${sessionKey === `agent:${config.managedAgentId}:boot`}`,
     `session_is_main=${sessionKey === `agent:${config.managedAgentId}:${ownerPrincipal}`}`,
     `prompt_present=${Boolean(normalizedString(event?.prompt))}`
@@ -395,17 +429,57 @@ export function createManagedKimiPlugin(options = {}) {
         && promptDigest(event?.accountId) === config.managedMainAccountDigest
       );
 
-      const isAuthenticatedTelegramOwnerRun = (event, ctx) => {
-        const providers = boundedContextValues(
-          [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel],
-          128
-        ).map((provider) => provider.toLowerCase());
-        const senders = boundedContextValues([event?.senderId, ctx?.senderId], 256);
-        return boundedContextValue([ctx?.sessionKey], 512) === managedMainSessionKey
-          && event?.senderIsOwner === true
-          && providers.includes('telegram')
-          && senders.length === 1
-          && promptDigest(senders[0]) === config.managedTelegramOwnerDigest;
+      const telegramOwnerProof = (event, ctx) => {
+        if (ctx?.messageProvider !== 'telegram') return null;
+        for (const provider of [ctx?.channel, ctx?.channelId, event?.channelId, event?.channel]) {
+          if (!optionalExact(provider, 'telegram')) return null;
+        }
+        if (ctx?.trigger !== 'user' || !optionalExact(event?.trigger, 'user')) return null;
+        if (event?.senderIsOwner !== true) return null;
+        if (boundedContextValue([ctx?.sessionKey], 512) !== managedMainSessionKey) return null;
+        if (!optionalExact(event?.sessionKey, managedMainSessionKey)) return null;
+
+        const eventSenderId = exactTelegramId(event?.senderId);
+        const contextSenderId = exactTelegramId(ctx?.senderId);
+        const channelSenderId = exactTelegramId(ctx?.channelContext?.sender?.id);
+        if (
+          !eventSenderId
+          || eventSenderId !== contextSenderId
+          || eventSenderId !== channelSenderId
+          || promptDigest(eventSenderId) !== config.managedTelegramOwnerDigest
+        ) return null;
+
+        const chatId = exactTelegramId(ctx?.channelContext?.chat?.id);
+        if (!chatId || chatId !== eventSenderId) return null;
+        for (const conversationId of [
+          ctx?.chatId,
+          ctx?.conversationId,
+          event?.chatId,
+          event?.conversationId
+        ]) {
+          if (!optionalExact(conversationId, chatId, exactTelegramId)) return null;
+        }
+
+        const accountId = exactAccountId(event?.accountId);
+        if (!accountId || !optionalExact(ctx?.accountId, accountId, exactAccountId)) return null;
+        if (
+          promptDigest(`telegram:v1:${accountId}:${eventSenderId}:${chatId}`)
+          !== config.managedTelegramBindingDigest
+        ) return null;
+
+        const contextRunId = runIdFrom(ctx);
+        const eventRunId = runIdFrom(event);
+        if (!contextRunId) return null;
+        if (Object.hasOwn(event ?? {}, 'runId') && !eventRunId) return null;
+        if (eventRunId && eventRunId !== contextRunId) return null;
+
+        return Object.freeze({
+          accountId,
+          conversationId: chatId,
+          runId: contextRunId,
+          senderId: eventSenderId,
+          sessionKey: managedMainSessionKey
+        });
       };
 
       const stopHeartbeat = (state) => {
@@ -476,7 +550,12 @@ export function createManagedKimiPlugin(options = {}) {
       });
 
       const requireRunId = (event, ctx) => {
-        const runId = runIdFrom(ctx, event);
+        const eventRunId = runIdFrom(event);
+        const contextRunId = runIdFrom(ctx);
+        if (eventRunId && contextRunId && eventRunId !== contextRunId) {
+          throw new Error('managed_kimi_run_id_conflict');
+        }
+        const runId = contextRunId || eventRunId;
         if (!runId) throw new Error('managed_kimi_run_id_required');
         return runId;
       };
@@ -550,12 +629,12 @@ export function createManagedKimiPlugin(options = {}) {
           && explicitProviders.length === 0
           && event?.senderIsOwner === true;
         const authenticatedManagedMain = isAuthenticatedManagedMainRun(event, ctx);
-        const authenticatedTelegramOwner = isAuthenticatedTelegramOwnerRun(event, ctx);
+        const telegramProof = telegramOwnerProof(event, ctx);
         if (
           detectedChannel !== 'KIMI'
           && !authenticatedOwnerWithoutIdentity
           && !authenticatedManagedMain
-          && !authenticatedTelegramOwner
+          && !telegramProof
         ) {
           return null;
         }
@@ -563,7 +642,7 @@ export function createManagedKimiPlugin(options = {}) {
         const configuredPrincipal = configuredOwnerPrincipal;
         const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
         const conversationId = boundedContextValue(
-          [ctx?.chatId, ctx?.channelId, event?.channelId, sessionKey],
+          [telegramProof?.conversationId, ctx?.chatId, ctx?.channelId, event?.channelId, sessionKey],
           512
         );
         return {
@@ -572,6 +651,7 @@ export function createManagedKimiPlugin(options = {}) {
           conversationId,
           senderId: boundedContextValue(
             [
+              telegramProof?.senderId,
               event?.senderId,
               ctx?.senderId,
               authenticatedOwnerWithoutIdentity || authenticatedManagedMain ? configuredPrincipal : ''
@@ -579,7 +659,7 @@ export function createManagedKimiPlugin(options = {}) {
             256
           ),
           accountId: boundedContextValue(
-            [event?.accountId, ctx?.accountId, authenticatedOwnerWithoutIdentity ? configuredPrincipal : ''],
+            [telegramProof?.accountId, event?.accountId, ctx?.accountId, authenticatedOwnerWithoutIdentity ? configuredPrincipal : ''],
             256
           ),
           provider: boundedContextValue(
@@ -587,13 +667,13 @@ export function createManagedKimiPlugin(options = {}) {
               event?.channelId,
               ctx?.messageProvider,
               ctx?.channel,
-              authenticatedTelegramOwner ? 'telegram' : '',
+              telegramProof ? 'telegram' : '',
               authenticatedOwnerWithoutIdentity || authenticatedManagedMain ? configuredProvider : ''
             ],
             128
           ).toLowerCase(),
-          channel: authenticatedTelegramOwner ? 'TELEGRAM' : 'KIMI',
-          correlationSource: authenticatedTelegramOwner
+          channel: telegramProof ? 'TELEGRAM' : 'KIMI',
+          correlationSource: telegramProof
             ? 'before_agent_run_telegram_owner'
             : authenticatedOwnerWithoutIdentity
             ? 'before_agent_run_owner_verdict'
@@ -627,15 +707,20 @@ export function createManagedKimiPlugin(options = {}) {
           principals
         );
         const authenticatedManagedMain = isAuthenticatedManagedMainRun(event, ctx);
-        const authenticatedTelegramOwner = isAuthenticatedTelegramOwnerRun(event, ctx);
-        const senderId = managedPrincipal
+        const telegramProof = inbound.correlationSource === 'before_agent_run_telegram_owner'
+          ? telegramOwnerProof(event, ctx)
+          : null;
+        const senderId = telegramProof?.senderId
+          || managedPrincipal
           || (authenticatedManagedMain ? configuredOwnerPrincipal : principals[0])
           || '';
         const channel = inbound.correlationSource === 'message_received' && inbound.channel === 'WEB'
           ? sourceChannel(event, ctx)
           : inbound.channel;
         const ownerVerified = channel === 'TELEGRAM'
-          ? authenticatedTelegramOwner
+          ? inbound.correlationSource === 'before_agent_run_telegram_owner'
+            ? Boolean(telegramProof)
+            : event?.senderIsOwner === true
           : event?.senderIsOwner === true
             || (channel === 'KIMI' && Boolean(managedPrincipal))
             || authenticatedManagedMain;
