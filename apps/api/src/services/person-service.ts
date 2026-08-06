@@ -113,14 +113,42 @@ export class PersonService {
       [personId]
     );
 
+    const skills = [
+      'chat.plan',
+      'chat.summarize',
+      'chat.extract_intents',
+      'profile.get_preferences',
+      'profile.set_preferences',
+      'memory.search_recent_context',
+      'calendar.list_events',
+      'calendar.get_event',
+      'calendar.find_availability',
+      'calendar.create_event',
+      'calendar.update_event',
+      'calendar.delete_event',
+      'gmail.list_unread',
+      'gmail.search_threads',
+      'gmail.read_thread',
+      'gmail.draft_reply',
+      'gmail.send_message',
+      'gmail.archive_thread',
+      'reminder.create',
+      'reminder.list',
+      'reminder.cancel',
+      'tasks.create',
+      'tasks.list',
+      'browser.fetch_page',
+      'browser.extract_structured',
+      'browser.fill_form',
+      'browser.submit_form',
+      'files.search_index'
+    ];
+
     await query(
       `INSERT INTO skills_enabled (person_id, skill, enabled)
-       VALUES ($1, 'conversation', true),
-              ($1, 'calendar', true),
-              ($1, 'email', true),
-              ($1, 'browser', true)
+       SELECT $1, unnest($2::text[]), true
        ON CONFLICT (person_id, skill) DO NOTHING`,
-      [personId]
+      [personId, skills]
     );
   }
 

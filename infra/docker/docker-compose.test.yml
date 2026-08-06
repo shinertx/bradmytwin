@@ -1,0 +1,28 @@
+# Isolated Postgres for integration/crash-replay tests (kernel slice 1, promotion gate).
+# Separate port (55433 — 5433 is squatted by a local ssh tunnel/cloud-sql proxy on
+# some dev machines) and throwaway volume so it can never collide with dev/prod data.
+# Usage:
+#   docker compose -f infra/docker/docker-compose.test.yml up -d
+#   npm run test:integration -w @brad/worker
+#   docker compose -f infra/docker/docker-compose.test.yml down -v
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: brad_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - '55433:5432'
+    # No restart policy, no persistent named volume: tests start from a clean
+    # migrated schema every run. `down -v` wipes everything.
+
+  redis-test:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '56379:6379'
+    restart: 'no'

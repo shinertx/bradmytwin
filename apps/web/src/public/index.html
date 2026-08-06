@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="icon" href="data:," />
     <title>BuddyClaw</title>
     <script src="/config.js"></script>
     <style>
@@ -72,6 +73,36 @@
         background: #fff;
         padding: 8px;
       }
+      .agent-room { margin-top: 16px; }
+      .agent-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+      .agent-toolbar h2 { margin: 0; }
+      .agent-actions { display: flex; gap: 8px; }
+      .agent-actions button { width: auto; margin: 0; padding: 8px 12px; }
+      .agent-layout { display: grid; grid-template-columns: minmax(190px, 0.32fr) minmax(0, 1fr); border: 1px solid var(--line); min-height: 420px; }
+      .agent-threads { border-right: 1px solid var(--line); background: #f7f9fc; overflow-y: auto; max-height: 540px; }
+      .agent-thread { width: 100%; margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--ink); text-align: left; padding: 12px; }
+      .agent-thread.active { background: #eaf2ff; box-shadow: inset 3px 0 0 var(--accent); }
+      .agent-thread strong, .agent-thread small { display: block; }
+      .agent-thread small { color: var(--muted); margin-top: 4px; }
+      .agent-conversation { display: flex; flex-direction: column; min-width: 0; }
+      .agent-meta { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+      .status-pill { border: 1px solid var(--line); padding: 3px 7px; font-size: 11px; font-weight: 600; background: #fff; }
+      .agent-turns { flex: 1; min-height: 300px; max-height: 430px; overflow-y: auto; padding: 12px; background: #fff; }
+      .agent-turn { border-left: 3px solid #9ba8ba; padding: 8px 10px; margin-bottom: 10px; background: #f8fafc; }
+      .agent-turn[data-agent="brad-kimi"] { border-color: #0a6bff; }
+      .agent-turn[data-agent="hermes"] { border-color: #1f9f89; }
+      .agent-turn[data-agent="codex"] { border-color: #7257d5; }
+      .agent-turn[data-agent="claude"] { border-color: #b45f38; }
+      .agent-turn[data-agent="verifier"] { border-color: #24763b; }
+      .agent-turn-head { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; margin-bottom: 5px; }
+      .agent-turn-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .reasoning-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+      .reasoning-item { min-width: 0; }
+      .reasoning-item strong { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; margin-bottom: 2px; }
+      .reasoning-item span { display: block; overflow-wrap: anywhere; }
+      .agent-compose { border-top: 1px solid var(--line); padding: 10px; display: flex; gap: 8px; }
+      .agent-compose input { flex: 1; }
+      .agent-compose button { width: auto; margin: 0; }
       .msg { margin: 8px 0; padding: 8px; border-radius: 8px; }
       .in { background: #eaf2ff; }
       .out { background: #f3fbf8; }
@@ -85,6 +116,9 @@
       }
       @media (max-width: 700px) {
         .brand { font-size: 27px; }
+        .agent-layout { grid-template-columns: 1fr; }
+        .agent-threads { border-right: 0; border-bottom: 1px solid var(--line); max-height: 150px; }
+        .reasoning-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -109,12 +143,12 @@
           <p class="muted">Start instantly with Google, or use phone OTP as fallback.</p>
           <button id="loginGoogle" class="success">Continue with Google</button>
           <p class="muted" style="margin: 14px 0 4px;">Use phone instead</p>
-          <input id="phone" placeholder="+15551234567" />
+          <input id="phone" placeholder="+15551234567" autocomplete="tel" inputmode="tel" />
           <div class="row">
             <button id="startOtp" class="secondary">Send OTP</button>
             <button id="verifyOtp">Verify and Sign In</button>
           </div>
-          <input id="otp" placeholder="6-digit code" />
+          <input id="otp" placeholder="6-digit code" autocomplete="one-time-code" inputmode="numeric" />
           <p id="authState" class="mono"></p>
         </section>
       </section>
@@ -144,7 +178,7 @@
           <section class="card">
             <h2>Web Chat</h2>
             <div id="chatLog"></div>
-            <textarea id="chatInput" rows="3" placeholder="Message your twin"></textarea>
+            <textarea id="chatInput" rows="3" placeholder="Message your twin" autocomplete="off"></textarea>
             <button id="sendChat">Send</button>
           </section>
           <section class="card">
@@ -153,6 +187,28 @@
             <div id="approvals" class="mono"></div>
           </section>
         </div>
+        <section class="card agent-room">
+          <div class="agent-toolbar">
+            <h2>Agent Room</h2>
+            <div class="agent-actions">
+              <button id="agentPause" class="light">Pause</button>
+              <button id="agentResume" class="light">Resume</button>
+              <button id="agentCancel" class="light">Cancel</button>
+              <button id="agentRefresh" class="secondary">Refresh</button>
+            </div>
+          </div>
+          <div class="agent-layout">
+            <div id="agentThreads" class="agent-threads"></div>
+            <div class="agent-conversation">
+              <div id="agentMeta" class="agent-meta"></div>
+              <div id="agentTurns" class="agent-turns"></div>
+              <div class="agent-compose">
+                <input id="agentFollowup" placeholder="Reply to this objective" autocomplete="off" />
+                <button id="agentSend">Send</button>
+              </div>
+            </div>
+          </div>
+        </section>
       </section>
     </div>
 
@@ -160,6 +216,8 @@
       const api = window.__BRAD_CONFIG__.API_BASE_URL;
       let token = localStorage.getItem('brad_token') || '';
       let streamBusy = false;
+      let selectedAgentThread = '';
+      let selectedAgentStatus = '';
 
       const loginShell = document.getElementById('loginShell');
       const appShell = document.getElementById('appShell');
@@ -169,13 +227,19 @@
       const connectorState = document.getElementById('connectorState');
       const chatLog = document.getElementById('chatLog');
       const phoneBanner = document.getElementById('phoneBanner');
+      const agentThreads = document.getElementById('agentThreads');
+      const agentMeta = document.getElementById('agentMeta');
+      const agentTurns = document.getElementById('agentTurns');
 
       function setState(el, text) { el.textContent = text; }
       function authHeader() { return token ? { Authorization: `Bearer ${token}` } : {}; }
+      function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+      }
 
       async function call(path, options = {}) {
         const headers = {
-          'Content-Type': 'application/json',
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
           ...(options.headers || {}),
           ...authHeader()
         };
@@ -285,7 +349,7 @@
               if (!line) continue;
               try {
                 const messages = JSON.parse(line.slice(6));
-                chatLog.innerHTML = messages.map((m) => `<div class="msg ${m.direction === 'INBOUND' ? 'in' : 'out'}"><strong>${m.direction}</strong> (${m.channel})<br>${m.body}</div>`).join('');
+                chatLog.innerHTML = messages.map((m) => `<div class="msg ${m.direction === 'INBOUND' ? 'in' : 'out'}"><strong>${escapeHtml(m.direction)}</strong> (${escapeHtml(m.channel)})<br>${escapeHtml(m.body)}</div>`).join('');
                 chatLog.scrollTop = chatLog.scrollHeight;
               } catch {}
             }
@@ -312,13 +376,108 @@
         if (out.ok && out.data.authUrl) window.open(out.data.authUrl, '_blank');
       };
 
+      function agentName(id) {
+        return ({ 'brad-kimi': 'Brad', hermes: 'Hermes', codex: 'Codex', claude: 'Claude', verifier: 'Verifier', owner: 'Ben', system: 'Conductor' })[id] || id;
+      }
+
+      function agentBody(message) {
+        if (message.message_type !== 'FIRST_PRINCIPLES') return escapeHtml(message.body);
+        let brief = message.metadata_json && message.metadata_json.brief;
+        if (!brief) {
+          try { brief = JSON.parse(message.body); } catch { return escapeHtml(message.body); }
+        }
+        const fields = [
+          ['Goal', brief.objective],
+          ['Constraint', brief.bindingConstraint],
+          ['Assumption', brief.hiddenAssumption],
+          ['Plan', brief.candidate],
+          ['Red-team', brief.strongestAttack],
+          ['Repair', brief.repair],
+          ['Proof', brief.decisiveTest]
+        ];
+        return `<div class="reasoning-grid">${fields.map(([label, value]) => `
+          <div class="reasoning-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`).join('')}</div>`;
+      }
+
+      function updateAgentActions() {
+        const terminal = ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(selectedAgentStatus);
+        document.getElementById('agentPause').disabled = !selectedAgentThread || terminal || selectedAgentStatus === 'PAUSED';
+        document.getElementById('agentResume').disabled = !selectedAgentThread || terminal || !['PAUSED', 'BLOCKED', 'WAITING', 'WAITING_VERIFICATION'].includes(selectedAgentStatus);
+        document.getElementById('agentCancel').disabled = !selectedAgentThread || terminal;
+      }
+
+      async function loadAgentThread(id) {
+        if (!id) return;
+        const out = await call(`/agent/threads/${id}`, { method: 'GET' });
+        if (!out.ok) return;
+        selectedAgentThread = id;
+        const thread = out.data.thread;
+        selectedAgentStatus = thread.status;
+        agentMeta.innerHTML = [
+          `<span class="status-pill">${escapeHtml(thread.status)}</span>`,
+          `<span class="status-pill">${escapeHtml(thread.reasoning_depth)}</span>`,
+          `<span class="status-pill">${escapeHtml(thread.phase)}</span>`,
+          thread.blocker_code ? `<span class="status-pill">${escapeHtml(thread.blocker_code)}</span>` : ''
+        ].join('');
+        agentTurns.innerHTML = out.data.messages.map((message) => `
+          <article class="agent-turn" data-agent="${escapeHtml(message.sender_agent_id)}">
+            <div class="agent-turn-head">
+              <strong>${escapeHtml(agentName(message.sender_agent_id))} · ${escapeHtml(message.message_type)}</strong>
+              <span>${escapeHtml(new Date(message.created_at).toLocaleString())}</span>
+            </div>
+            <div class="agent-turn-body">${agentBody(message)}</div>
+          </article>`).join('');
+        agentTurns.scrollTop = agentTurns.scrollHeight;
+        updateAgentActions();
+        await refreshAgentThreads();
+      }
+
+      async function refreshAgentThreads() {
+        if (!token) return;
+        const out = await call('/agent/threads', { method: 'GET' });
+        if (!out.ok) return;
+        const threads = out.data.threads || [];
+        if (!selectedAgentThread && threads[0]) selectedAgentThread = threads[0].id;
+        agentThreads.innerHTML = threads.map((thread) => `
+          <button class="agent-thread ${thread.id === selectedAgentThread ? 'active' : ''}" data-thread-id="${escapeHtml(thread.id)}">
+            <strong>${escapeHtml(thread.current_assignment)}</strong>
+            <small>${escapeHtml(thread.status)} · ${escapeHtml(thread.reasoning_depth)}</small>
+          </button>`).join('');
+        agentThreads.querySelectorAll('[data-thread-id]').forEach((button) => {
+          button.onclick = () => loadAgentThread(button.dataset.threadId);
+        });
+      }
+
+      async function agentAction(action) {
+        if (!selectedAgentThread) return;
+        await call(`/agent/threads/${selectedAgentThread}/${action}`, { method: 'POST' });
+        await loadAgentThread(selectedAgentThread);
+      }
+      document.getElementById('agentPause').onclick = () => agentAction('pause');
+      document.getElementById('agentResume').onclick = () => agentAction('resume');
+      document.getElementById('agentCancel').onclick = () => agentAction('cancel');
+      document.getElementById('agentRefresh').onclick = () => selectedAgentThread ? loadAgentThread(selectedAgentThread) : refreshAgentThreads();
+      document.getElementById('agentSend').onclick = async () => {
+        const input = document.getElementById('agentFollowup');
+        const text = input.value.trim();
+        if (!selectedAgentThread || !text) return;
+        const out = await call(`/agent/threads/${selectedAgentThread}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+        if (out.ok) input.value = '';
+        await loadAgentThread(selectedAgentThread);
+      };
+      updateAgentActions();
+
       renderAuthShell();
       if (token) {
         refreshMe();
         refreshChat();
+        refreshAgentThreads().then(() => selectedAgentThread && loadAgentThread(selectedAgentThread));
       }
       setInterval(() => {
         refreshChat();
+      }, 5000);
+      setInterval(() => {
+        if (selectedAgentThread) loadAgentThread(selectedAgentThread);
       }, 5000);
     </script>
   </body>

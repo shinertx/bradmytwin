@@ -74,12 +74,13 @@ docker compose -f infra/docker/docker-compose.yml up --build
 ## Notes
 
 - Twilio, Meta WhatsApp, and Telegram are safe to run in dev without credentials: outbound messages log to console.
-- Google OAuth callback is scaffolded and stores encrypted token blobs with KMS envelope logic.
-- OpenClaw integration uses an HTTP adapter; fallback stub is active when `OPENCLAW_URL` is not set.
+- Google connector OAuth now performs real token exchange + refresh and stores encrypted token bundles.
+- OpenClaw deep integration uses `/v1/responses` with tool-call loop and approval-safe write continuation.
 - OpenClaw can run in three modes via `OPENCLAW_MODE`:
-  - `stub`: local deterministic fallback (default for dev)
+  - `stub`: local deterministic fallback
   - `http`: calls external `/v1/...` OpenClaw HTTP adapter
   - `cli`: calls local `openclaw agent --json` via CLI (best for Gateway-based deployments)
 - For `cli` mode, set `OPENCLAW_CLI_AGENT_ID` to a locked-down OpenClaw agent profile (recommended: deny `group:openclaw` tools and let Brad app handle approvals).
+- If your DB predates deep OpenClaw changes, apply `infra/postgres/init/002_deep_openclaw.sql` manually.
 
 See [`docs`](./docs) for architecture, security, API, and runbook details.
