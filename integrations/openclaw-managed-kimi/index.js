@@ -328,8 +328,9 @@ export function createManagedKimiPlugin(options = {}) {
 
       const claimNormalRun = async (event, ctx, runId) => {
         const inbound = inboundStates.get(runId);
-        if (!inbound || inbound.senderIsOwner !== true) throw new Error('managed_kimi_owner_proof_required');
-        if (!inbound.externalMessageId || !inbound.sessionKey || !inbound.conversationId || !inbound.senderId) {
+        if (!inbound || event?.senderIsOwner !== true) throw new Error('managed_kimi_owner_proof_required');
+        const senderId = boundedContextValue([event?.senderId, inbound.senderId], 256);
+        if (!inbound.externalMessageId || !inbound.sessionKey || !inbound.conversationId || !senderId) {
           throw new Error('managed_kimi_inbound_correlation_required');
         }
         const text = normalizedString(event?.prompt);
@@ -340,7 +341,7 @@ export function createManagedKimiPlugin(options = {}) {
           externalMessageId: inbound.externalMessageId,
           conversationId: inbound.conversationId,
           sessionKey: inbound.sessionKey,
-          senderId: inbound.senderId,
+          senderId,
           claimOwner,
           timestamp: now(),
           text
@@ -494,13 +495,12 @@ export function createManagedKimiPlugin(options = {}) {
           [event?.conversationId, ctx?.conversationId, ctx?.chatId, ctx?.channelId, sessionKey],
           512
         );
-        const senderId = boundedContextValue([event?.senderId, ctx?.senderId], 256, 'unknown');
+        const senderId = boundedContextValue([event?.senderId, ctx?.senderId], 256);
         const next = {
           externalMessageId,
           sessionKey,
           conversationId,
           senderId,
-          senderIsOwner: event?.senderIsOwner === true || ctx?.senderIsOwner === true,
           channel: sourceChannel(event, ctx),
           createdAt: now()
         };
@@ -509,7 +509,7 @@ export function createManagedKimiPlugin(options = {}) {
           existing
           && (existing.externalMessageId !== next.externalMessageId || existing.sessionKey !== next.sessionKey)
         ) {
-          inboundStates.set(runId, { ...next, senderIsOwner: false });
+          inboundStates.set(runId, next);
           return;
         }
         inboundStates.set(runId, next);

@@ -45,6 +45,8 @@ function kimiContext(runId, overrides = {}) {
     channel: 'kimi-claw',
     channelId: 'conversation-1',
     chatId: 'conversation-1',
+    conversationId: 'conversation-1',
+    messageId: `provider-message-${runId}`,
     senderId: 'owner-1',
     sessionId: `session-${runId}`,
     sessionKey: `agent:${CONFIG.managedAgentId}:kimi-claw:direct:conversation-1`,
@@ -54,20 +56,18 @@ function kimiContext(runId, overrides = {}) {
 }
 
 function runEvent(prompt, overrides = {}) {
-  return { prompt, messages: [], ...overrides };
-}
-
-function inboundEvent(runId, overrides = {}) {
   return {
-    runId,
-    messageId: `provider-message-${runId}`,
-    conversationId: 'conversation-1',
-    sessionKey: `agent:${CONFIG.managedAgentId}:kimi-claw:direct:conversation-1`,
+    prompt,
+    messages: [],
     channelId: 'kimi-claw',
     senderId: 'owner-1',
     senderIsOwner: true,
     ...overrides
   };
+}
+
+function inboundEvent(overrides = {}) {
+  return { content: 'owner message', messages: [], success: true, ...overrides };
 }
 
 function claim(runId) {
@@ -90,8 +90,8 @@ function gatewayOk(operation) {
 }
 
 async function claimNormal(api, runId, prompt = `objective ${runId}`, inboundOverrides = {}, ctxOverrides = {}) {
-  const ctx = kimiContext(runId, ctxOverrides);
-  await api.handlers.get('inbound_claim')(inboundEvent(runId, inboundOverrides), ctx);
+  const ctx = kimiContext(runId, { ...inboundOverrides, ...ctxOverrides });
+  await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
   const result = await api.handlers.get('before_agent_run')(runEvent(prompt), ctx);
   return { ctx, result };
 }
@@ -124,12 +124,12 @@ test('concurrent runs settle against their exact provider message and claim befo
   );
 
   await api.handlers.get('inbound_claim')(
-    inboundEvent('run-a', { messageId: 'provider-a' }),
-    kimiContext('run-a')
+    inboundEvent(),
+    kimiContext('run-a', { messageId: 'provider-a' })
   );
   await api.handlers.get('inbound_claim')(
-    inboundEvent('run-b', { messageId: 'provider-b' }),
-    kimiContext('run-b')
+    inboundEvent(),
+    kimiContext('run-b', { messageId: 'provider-b' })
   );
   const startA = api.handlers.get('before_agent_run')(runEvent('objective A'), kimiContext('run-a'));
   const startB = api.handlers.get('before_agent_run')(runEvent('objective B'), kimiContext('run-b'));
@@ -209,7 +209,33 @@ test('provider message id, not run id, is the durable dedupe identity', async ()
   );
 });
 
-test('unknown or non-owner inbound signals fail closed before intake', async () => {
+test('owner proof from before_agent_run joins inbound correlation before intake', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+
+  const ctx = kimiContext('official-hook-contract', {
+    messageId: 'provider-official-hook-contract',
+    senderId: 'owner-from-claim-context'
+  });
+  await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('official hook contract', { senderId: 'owner-from-agent-run', senderIsOwner: true }),
+    ctx
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(calls[0].operation, 'intake');
+  assert.equal(calls[0].payload.externalMessageId, 'provider-official-hook-contract');
+  assert.equal(calls[0].payload.senderId, 'owner-from-agent-run');
+});
+
+test('unknown or non-owner execution signals fail closed before intake', async () => {
   const calls = [];
   const api = fakeApi();
   createManagedKimiPlugin({
@@ -220,11 +246,12 @@ test('unknown or non-owner inbound signals fail closed before intake', async () 
   }).register(api);
 
   for (const [runId, senderIsOwner] of [['unknown-owner', undefined], ['non-owner', false]]) {
-    const event = inboundEvent(runId);
+    const ctx = kimiContext(runId);
+    await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
+    const event = runEvent('must not run');
     if (senderIsOwner === undefined) delete event.senderIsOwner;
     else event.senderIsOwner = senderIsOwner;
-    await api.handlers.get('inbound_claim')(event, kimiContext(runId));
-    const result = await api.handlers.get('before_agent_run')(runEvent('must not run'), kimiContext(runId));
+    const result = await api.handlers.get('before_agent_run')(event, ctx);
     assert.equal(result.outcome, 'block');
   }
   assert.deepEqual(calls, []);
@@ -233,8 +260,7 @@ test('unknown or non-owner inbound signals fail closed before intake', async () 
 test('missing provider message id or session key fails closed', async () => {
   const api = fakeApi();
   createManagedKimiPlugin({ gateway: async () => claim('should-not-happen') }).register(api);
-  const event = inboundEvent('missing-correlation', { messageId: '' });
-  delete event.sessionKey;
+  const event = inboundEvent();
   await api.handlers.get('inbound_claim')(
     event,
     kimiContext('missing-correlation', { sessionKey: '', messageId: '' })
