@@ -8,6 +8,14 @@ export interface HermesRunRequest {
   prompt: string;
   skills: string[];
   toolsets: string[];
+  objectiveId: string;
+  threadId: string;
+  messageId: string;
+  sessionId?: string;
+  authorityEnvelope: object;
+  artifactRoot: string;
+  mode: 'RESEARCH' | 'BUILD' | 'OPERATE';
+  replyTo?: string;
 }
 
 export interface HermesRunResult {
@@ -102,7 +110,15 @@ export class ProcessHermesRunner implements HermesRunner {
         HERMES_PROVIDER: this.options.provider,
         HERMES_MODEL: this.options.model,
         HERMES_SKILLS: request.skills.length ? request.skills.join(',') : 'none',
-        HERMES_TOOLSETS: request.toolsets.join(',')
+        HERMES_TOOLSETS: request.toolsets.join(','),
+        HERMES_OBJECTIVE_ID: request.objectiveId,
+        HERMES_THREAD_ID: request.threadId,
+        HERMES_MESSAGE_ID: request.messageId,
+        HERMES_RESUME_SESSION_ID: request.sessionId ?? '',
+        HERMES_AUTHORITY_ENVELOPE: JSON.stringify(request.authorityEnvelope),
+        HERMES_ARTIFACT_ROOT: request.artifactRoot,
+        HERMES_DELEGATION_MODE: request.mode,
+        HERMES_REPLY_TO: request.replyTo ?? ''
       }
     );
 

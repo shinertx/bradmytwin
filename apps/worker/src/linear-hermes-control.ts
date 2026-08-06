@@ -780,7 +780,20 @@ export async function processOneHermesJob(
       jobId: job.id,
       prompt: String(job.input_json.prompt ?? ''),
       skills: Array.isArray(job.skills_json) ? job.skills_json : [],
-      toolsets: Array.isArray(job.toolsets_json) ? job.toolsets_json : ['clarify']
+      toolsets: Array.isArray(job.toolsets_json) ? job.toolsets_json : ['clarify'],
+      objectiveId: job.objective_id,
+      threadId: String(job.input_json.threadId ?? job.objective_id),
+      messageId: job.id,
+      sessionId: typeof job.input_json.sessionId === 'string' ? job.input_json.sessionId : undefined,
+      authorityEnvelope: {
+        scope: 'linear_clarify_only',
+        readOnly: true,
+        externalWrites: false,
+        allowedToolsets: Array.isArray(job.toolsets_json) ? job.toolsets_json : ['clarify']
+      },
+      artifactRoot: process.env.HERMES_OUTPUT_ROOT ?? '/home/benjijmac/.hermes/brad-agent-runs',
+      mode: 'RESEARCH',
+      replyTo: typeof job.input_json.linearIssueId === 'string' ? job.input_json.linearIssueId : undefined
     });
     await finalizeHermesSuccess(pool, job, attemptId, result);
   } catch (error) {

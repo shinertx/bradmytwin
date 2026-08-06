@@ -12,6 +12,8 @@ import { approvalRoutes } from './routes/approvals.js';
 import { webChatRoutes } from './routes/web-chat.js';
 import { healthRoutes } from './routes/health.js';
 import { eaRoutes } from './routes/ea.js';
+import { agentThreadRoutes } from './routes/agent-threads.js';
+import { agentBridgeRoutes } from './routes/agent-bridge.js';
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
@@ -58,6 +60,8 @@ async function buildServer() {
   await app.register(approvalRoutes);
   await app.register(webChatRoutes);
   await app.register(eaRoutes);
+  await app.register(agentThreadRoutes);
+  await app.register(agentBridgeRoutes);
 
   return app;
 }

@@ -7,15 +7,16 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @brad/domain && npm run build -w @brad/clients && npm run build -w @brad/api && npm run build -w @brad/worker && npm run build -w @brad/web",
+    "build": "npm run build -w @brad/domain && npm run build -w @brad/clients && npm run build -w @brad/api && npm run build -w @brad/worker && npm run build -w @brad/web && npm run build -w @brad/buzz-bridge",
     "dev": "npm run dev -ws --if-present",
-    "test": "npm run test -w @brad/domain && npm run test -w @brad/api --if-present",
+    "test": "npm run build -w @brad/domain && npm run build -w @brad/clients && npm run test -w @brad/domain && npm run test -w @brad/api --if-present && npm run test -w @brad/worker --if-present && npm run test -w @brad/buzz-bridge --if-present",
     "lint": "echo 'lint not configured'"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "devDependencies": {
-    "@call-e/cli": "^0.3.6"
+    "@call-e/cli": "^0.3.6",
+    "esbuild": "^0.28.1"
   }
 }

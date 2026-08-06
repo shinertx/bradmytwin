@@ -3,12 +3,27 @@ import { z } from 'zod';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { CallEClient, MetaWhatsAppClient, TelegramClient, TwilioClient, KmsEnvelope, type CipherBundle } from '@brad/clients';
+import { builtInRunnerRegistry } from './agent-runners.js';
+import { processOneAgentJob, reconcileExpiredAgentLeases } from './conductor.js';
+import { ProcessHermesRunner } from './hermes-runner.js';
+import { digestPayload } from './digest.js';
+import {
+  acknowledgeAgentEvents,
+  createAgentRedis,
+  ensureAgentConsumerGroup,
+  publishPendingAgentEvents,
+  reconcileStaleAgentOutbox,
+  waitForAgentEvents,
+  type AgentStreamConfig
+} from './agent-stream.js';
+import { publishTelegramBriefs, reconcileStaleTelegramClaims } from './telegram-outbox.js';
 
 dotenv.config();
 
 const env = z
   .object({
     DATABASE_URL: z.string().default('postgres://postgres:postgres@postgres:5432/brad'),
+    REDIS_URL: z.string().default('redis://redis:6379'),
     TWILIO_ACCOUNT_SID: z.string().optional(),
     TWILIO_AUTH_TOKEN: z.string().optional(),
     TWILIO_FROM_NUMBER: z.string().optional(),
@@ -32,6 +47,21 @@ const env = z
       }
       return value;
     }, z.boolean()).default(false),
+    OPENCLAW_MODE: z.enum(['stub', 'http', 'cli']).default('http'),
+    OPENCLAW_CLI_BIN: z.string().default('openclaw'),
+    OPENCLAW_CLI_AGENT_ID: z.string().optional(),
+    OPENCLAW_CLI_TIMEOUT_MS: z.coerce.number().default(90000),
+    BRAD_CONDUCTOR_MODE: z.enum(['off', 'shadow', 'active']).default('shadow'),
+    BRAD_AGENT_WORKER_IDENTITY: z.string().default('brad-worker'),
+    BRAD_AGENT_LEASE_SECONDS: z.coerce.number().int().positive().default(300),
+    BRAD_AGENT_WORKFLOW_VERSION: z.string().default('brad-conductor-v1'),
+    BRAD_AGENT_STREAM_KEY: z.string().default('brad:agent:jobs'),
+    BRAD_AGENT_STREAM_GROUP: z.string().default('brad-agent-workers'),
+    HERMES_RUNNER_PATH: z.string().optional(),
+    HERMES_OUTPUT_ROOT: z.string().default('/home/benjijmac/.hermes/brad-agent-runs'),
+    HERMES_RUNNER_TIMEOUT_MS: z.coerce.number().int().positive().default(900000),
+    HERMES_PROVIDER: z.string().default('openai-codex'),
+    HERMES_MODEL: z.string().default('gpt-5.4-mini'),
     GOOGLE_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_SECRET: z.string().optional(),
     KMS_KEY_NAME: z.string().optional(),
@@ -63,6 +93,27 @@ const metaWhatsApp = new MetaWhatsAppClient(
 );
 const telegram = new TelegramClient(env.TELEGRAM_BOT_TOKEN, undefined);
 const kms = new KmsEnvelope(env.KMS_KEY_NAME);
+const hermesRunner = env.HERMES_RUNNER_PATH
+  ? new ProcessHermesRunner({
+      runnerPath: env.HERMES_RUNNER_PATH,
+      outputRoot: env.HERMES_OUTPUT_ROOT,
+      timeoutMs: env.HERMES_RUNNER_TIMEOUT_MS,
+      provider: env.HERMES_PROVIDER,
+      model: env.HERMES_MODEL
+    })
+  : undefined;
+const agentRunners = builtInRunnerRegistry({
+  openclaw: {
+    baseUrl: env.OPENCLAW_URL,
+    apiKey: env.OPENCLAW_API_KEY,
+    mode: env.OPENCLAW_MODE,
+    cliBin: env.OPENCLAW_CLI_BIN,
+    cliAgentId: env.OPENCLAW_CLI_AGENT_ID,
+    timeoutMs: env.OPENCLAW_CLI_TIMEOUT_MS,
+    model: env.OPENCLAW_MODEL_DEFAULT
+  },
+  hermes: hermesRunner ? { runner: hermesRunner, artifactRoot: env.HERMES_OUTPUT_ROOT } : undefined
+});
 
 interface ApprovalRow {
   id: string;
@@ -76,6 +127,10 @@ interface ApprovalRow {
   payload_json: Record<string, unknown>;
   origin_channel: 'SMS' | 'WHATSAPP' | 'TELEGRAM' | 'WEB' | null;
   origin_external_user_key: string | null;
+  objective_id: string | null;
+  payload_digest: string | null;
+  contract_version: number | null;
+  attempt_id?: string;
 }
 
 interface ConnectorRow {
@@ -554,8 +609,60 @@ async function claimApprovals(limit = 20): Promise<ApprovalRow[]> {
      FROM picked
      WHERE ar.id = picked.id
      RETURNING ar.id, ar.person_id, ar.action_type, ar.tool_name, ar.tool_call_id, ar.tool_input_json,
-               ar.openclaw_session_id, ar.openclaw_response_id, ar.payload_json, ar.origin_channel, ar.origin_external_user_key`,
+               ar.openclaw_session_id, ar.openclaw_response_id, ar.payload_json, ar.origin_channel,
+               ar.origin_external_user_key, ar.objective_id, ar.payload_digest, ar.contract_version`,
     [limit]
+  );
+}
+
+async function beginApprovalAttempt(row: ApprovalRow): Promise<string> {
+  const verifiedDigest = digestPayload({
+    actionType: row.action_type,
+    payload: row.payload_json,
+    toolName: row.tool_name,
+    toolInput: row.tool_input_json
+  });
+  if (!row.payload_digest || verifiedDigest !== row.payload_digest) {
+    throw new Error('approval_payload_digest_mismatch');
+  }
+  const rows = await query<{ id: string }>(
+    `WITH next_attempt AS (
+       SELECT COALESCE(MAX(attempt_no), 0) + 1 AS attempt_no
+       FROM brad_approval_attempts WHERE approval_id = $1
+     )
+     INSERT INTO brad_approval_attempts (
+       approval_id, attempt_no, request_digest, verified_digest, digest_match, status
+     ) SELECT $1, attempt_no, $2, $3, true, 'started' FROM next_attempt
+     RETURNING id`,
+    [row.id, row.payload_digest, verifiedDigest]
+  );
+  return rows[0].id;
+}
+
+function providerEffectId(result: Record<string, unknown>): string | null {
+  for (const key of ['id', 'sid', 'call_id', 'callId', 'messageId', 'eventId', 'taskId']) {
+    const value = result[key];
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+  }
+  return null;
+}
+
+async function quarantineStaleApprovalClaims(): Promise<void> {
+  await query(
+    `UPDATE approval_requests ar
+     SET status_detail = 'reconcile_required', updated_at = now()
+     WHERE ar.status = 'APPROVED' AND ar.status_detail = 'processing'
+       AND EXISTS (
+         SELECT 1 FROM brad_approval_attempts a
+         WHERE a.approval_id = ar.id AND a.status = 'provider_submitted'
+       )`
+  );
+  await query(
+    `UPDATE approval_requests ar
+     SET status_detail = 'queued_for_execution', updated_at = now()
+     WHERE ar.status = 'APPROVED' AND ar.status_detail = 'processing'
+       AND ar.updated_at < now() - interval '10 minutes'
+       AND NOT EXISTS (SELECT 1 FROM brad_approval_attempts a WHERE a.approval_id = ar.id)`
   );
 }
 
@@ -563,8 +670,23 @@ async function processApprovals(): Promise<void> {
   const approvals = await claimApprovals(20);
 
   for (const row of approvals) {
+    let attemptId: string | null = null;
     try {
+      attemptId = await beginApprovalAttempt(row);
+      await query(
+        `UPDATE brad_approval_attempts
+         SET status = 'provider_submitted', provider_submitted_at = now()
+         WHERE id = $1`,
+        [attemptId]
+      );
       const result = await executeWriteTool(row);
+      const effectId = providerEffectId(result);
+      await query(
+        `UPDATE brad_approval_attempts
+         SET status = 'succeeded', provider_effect_id = $2, finished_at = now()
+         WHERE id = $1`,
+        [attemptId, effectId]
+      );
       const assistantText = await continueOpenClaw(row, result);
       await sendCompletion(row, assistantText);
 
@@ -583,11 +705,22 @@ async function processApprovals(): Promise<void> {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown_error';
 
+      if (attemptId) {
+        await query(
+          `UPDATE brad_approval_attempts
+           SET status = 'unknown', error = $2, finished_at = now()
+           WHERE id = $1 AND status = 'provider_submitted'`,
+          [attemptId, message.slice(0, 500)]
+        );
+      }
+
       await query(
         `UPDATE approval_requests
-         SET status = 'FAILED', status_detail = $2, updated_at = now()
+         SET status = CASE WHEN $3::boolean THEN 'APPROVED' ELSE 'FAILED' END,
+             status_detail = CASE WHEN $3::boolean THEN 'reconcile_required' ELSE $2 END,
+             updated_at = now()
          WHERE id = $1`,
-        [row.id, message.slice(0, 500)]
+        [row.id, message.slice(0, 500), Boolean(attemptId)]
       );
 
       await query(
@@ -601,11 +734,101 @@ async function processApprovals(): Promise<void> {
   }
 }
 
+async function drainAgentJobs(): Promise<number> {
+  let processed = 0;
+  for (; processed < 50; processed++) {
+    const found = await processOneAgentJob(pool, agentRunners, {
+      workerIdentity: env.BRAD_AGENT_WORKER_IDENTITY,
+      leaseSeconds: env.BRAD_AGENT_LEASE_SECONDS,
+      workflowVersion: env.BRAD_AGENT_WORKFLOW_VERSION
+    });
+    if (!found) break;
+  }
+  return processed;
+}
+
 async function main(): Promise<void> {
   console.log('worker_started');
   setInterval(async () => {
     await processApprovals();
   }, 3000);
+  setInterval(async () => {
+    await quarantineStaleApprovalClaims();
+  }, 60000);
+
+  if (env.BRAD_CONDUCTOR_MODE === 'active') {
+    const publisherRedis = createAgentRedis(env.REDIS_URL);
+    const consumerRedis = createAgentRedis(env.REDIS_URL);
+    const streamConfig: AgentStreamConfig = {
+      streamKey: env.BRAD_AGENT_STREAM_KEY,
+      groupName: env.BRAD_AGENT_STREAM_GROUP,
+      consumerName: `${env.BRAD_AGENT_WORKER_IDENTITY}-${process.pid}`
+    };
+    let publishing = false;
+    let shuttingDown = false;
+
+    const publish = async (): Promise<void> => {
+      if (publishing) return;
+      publishing = true;
+      try {
+        await Promise.all([
+          publishPendingAgentEvents(pool, publisherRedis, env.BRAD_AGENT_STREAM_KEY),
+          publishTelegramBriefs(pool, telegram)
+        ]);
+      } catch (error) {
+        console.error('agent_stream_publish_failed', error);
+      } finally {
+        publishing = false;
+      }
+    };
+
+    await ensureAgentConsumerGroup(consumerRedis, streamConfig);
+    await reconcileStaleAgentOutbox(pool);
+    await publish();
+    await drainAgentJobs();
+    const publishTimer = setInterval(() => void publish(), 500);
+
+    void (async () => {
+      while (!shuttingDown) {
+        try {
+          await ensureAgentConsumerGroup(consumerRedis, streamConfig);
+          const eventIds = await waitForAgentEvents(consumerRedis, streamConfig);
+          if (eventIds.length === 0) continue;
+          await drainAgentJobs();
+          await acknowledgeAgentEvents(consumerRedis, streamConfig, eventIds);
+        } catch (error) {
+          console.error('agent_stream_consume_failed', error);
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+      }
+    })();
+
+    setInterval(async () => {
+      try {
+        const [leases, staleOutbox, staleTelegram] = await Promise.all([
+          reconcileExpiredAgentLeases(pool),
+          reconcileStaleAgentOutbox(pool),
+          reconcileStaleTelegramClaims(pool)
+        ]);
+        await publish();
+        const recovered = await drainAgentJobs();
+        if (leases.requeued || leases.blocked || staleOutbox || staleTelegram || recovered) {
+          console.warn('agent_conductor_recovery', { ...leases, staleOutbox, staleTelegram, recovered });
+        }
+      } catch (error) {
+        console.error('agent_conductor_recovery_failed', error);
+      }
+    }, 120000);
+
+    const stop = (): void => {
+      shuttingDown = true;
+      clearInterval(publishTimer);
+      publisherRedis.disconnect();
+      consumerRedis.disconnect();
+    };
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
+  }
 }
 
 main().catch((error) => {

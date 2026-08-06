@@ -10,13 +10,16 @@ dotenv.config();
 const app = Fastify({ logger: true });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const staticRootCandidates = [
+const staticRoot = [
   path.join(__dirname, 'public'),
-  path.join(__dirname, '../src/public'),
-  path.join(process.cwd(), 'src/public'),
-  path.join(process.cwd(), 'apps/web/src/public')
-];
-const staticRoot = staticRootCandidates.find((candidate) => fs.existsSync(candidate)) ?? staticRootCandidates[0];
+  path.join(__dirname, '..', 'src', 'public'),
+  path.join(process.cwd(), 'apps', 'web', 'src', 'public'),
+  path.join(process.cwd(), 'src', 'public')
+].find((candidate) => fs.existsSync(candidate));
+
+if (!staticRoot) {
+  throw new Error('Brad web static assets were not found');
+}
 
 await app.register(fastifyStatic, {
   root: staticRoot,

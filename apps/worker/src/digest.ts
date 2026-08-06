@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
  * compatible with the API copy; dedup into @brad/domain is planned for a
  * follow-up slice (see docs/KERNEL_SLICE_1_BUILD_PLAN_2026-08-03.md).
  */
-export function sha256(value: string): string {
+export function sha256(value: string | Buffer): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
