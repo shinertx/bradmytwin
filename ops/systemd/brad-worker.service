@@ -1,0 +1,14 @@
+[Unit]
+Description=Brad Digital Twin Worker
+After=network-online.target brad-api.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/benjijmac/bradmytwin
+ExecStart=/usr/bin/node apps/worker/dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

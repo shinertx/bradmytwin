@@ -1,0 +1,14 @@
+[Unit]
+Description=Brad Digital Twin API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/benjijmac/bradmytwin
+ExecStart=/usr/bin/node apps/api/dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

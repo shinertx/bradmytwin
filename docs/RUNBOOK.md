@@ -42,20 +42,22 @@ The kernel is not complete merely because the migration is applied. A `/do` obje
 6. Configure Twilio + Telegram webhook URLs.
 
 ## Current OpenClaw / Telegram deployment
-Current production-like personal-agent deployment:
+Current personal-agent deployment:
 - GCP project: `arbitrage-bot-450800`
 - VM: `meme-snipe-v19-vm`
 - Zone: `us-central1-a`
-- OpenClaw gateway: `openclaw-gateway.service` on `127.0.0.1:18789`
-- Default agent: `brad-runtime`
-- Model observed by the 2026-08-04 no-delivery canary: `openai/gpt-5.5`
+- Active OpenClaw runtime: managed Kimi Claw named `Brad`
+- Active managed model: `kimi-coding/k2p6`
 - Telegram bot: `@Simpleclawtestingbbot`
+- GCP rollback gateway: `openclaw-gateway.service`, stopped and disabled on 2026-08-06
+- GCP gateway watchdog: `brad-watchdog.timer`, stopped and disabled on 2026-08-06
+- GCP control plane retained: Brad API, Postgres, worker, web, Linear/Hermes bridge, and Hermes services
 
-See [`docs/OPENCLAW_TELEGRAM_HEARTBEAT.md`](./OPENCLAW_TELEGRAM_HEARTBEAT.md) for the complete setup, heartbeat, pairing, allowlist, and recovery runbook.
+See [`docs/operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md`](./operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md) for the active setup, pairing, delivery-proof gate, and fail-closed rollback. [`docs/OPENCLAW_TELEGRAM_HEARTBEAT.md`](./OPENCLAW_TELEGRAM_HEARTBEAT.md) documents the inactive GCP rollback runtime.
 
-OpenClaw remains current until the Kimi Claw candidate passes [`docs/operations/KIMI_CLAW_CUTOVER_CHECKLIST.md`](./operations/KIMI_CLAW_CUTOVER_CHECKLIST.md). Do not stop or remove OpenClaw during candidate setup or shadow testing.
+Do not re-enable the GCP OpenClaw gateway while managed Kimi is polling Telegram. Exactly one poller may hold the bot token. Do not delete the GCP VM: managed Kimi still uses its Brad/Postgres control plane through the forced-command SSH bridge.
 
-The current service uses `/home/benjijmac/.local/node-v24.18.0-linux-x64/bin/node`. The system shell's older Node binary does not satisfy OpenClaw's CLI version check, so operator canaries must prepend that Node 24 directory unless the shell runtime is upgraded deliberately.
+The inactive GCP rollback service uses `/home/benjijmac/.local/node-v24.18.0-linux-x64/bin/node`. The system shell's older Node binary does not satisfy OpenClaw's CLI version check, so rollback canaries must prepend that Node 24 directory unless the shell runtime is upgraded deliberately.
 
 ## Hermes specialist worker
 
@@ -76,7 +78,7 @@ Automated Linear dispatch requires an issue in `In Progress` with both `Hermes` 
 - Web: `curl http://localhost:5173/healthz`
 - DB: `docker exec -it <postgres-container> psql -U postgres -d brad`
 - OpenClaw Responses: `curl -H "Authorization: Bearer $OPENCLAW_API_KEY" $OPENCLAW_URL/v1/responses`
-- OpenClaw gateway heartbeat: `curl -fsS http://127.0.0.1:18789/readyz`
+- GCP rollback gateway state: `systemctl --user is-active openclaw-gateway.service; systemctl --user is-enabled openclaw-gateway.service`
 - Hermes backend: `curl -fsS http://127.0.0.1:9119/api/status`
 - Hermes dashboard: `curl -fsS http://127.0.0.1:9120/api/status`
 - Linear/Hermes bridge: `systemctl --user is-enabled brad-linear-hermes.service && systemctl --user is-active brad-linear-hermes.service`
@@ -88,7 +90,7 @@ Automated Linear dispatch requires an issue in `In Progress` with both `Hermes` 
 - If cross-user concern: query `messages`, `approvals`, and `audit_logs` by `person_id`.
 - If connector failures spike: inspect `/connectors/status` and token refresh errors.
 - If EA automation looks stale: inspect `/ea/dashboard`, active rows in `ea_monitors`, and recent `ea_signal_ingested` audit events.
-- If Telegram/OpenClaw is stale: run the heartbeat check in `docs/OPENCLAW_TELEGRAM_HEARTBEAT.md` before editing config.
+- If managed Telegram/OpenClaw is stale: use `docs/operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md`. Never enable the GCP rollback poller until managed Telegram is confirmed stopped.
 - If a Hermes job times out after it started: inspect `brad_worker_jobs`, `brad_worker_job_attempts`, and `brad_worker_receipts`. A running lease becomes `RECONCILE_REQUIRED`; never reset it to queued until the Hermes session and artifact directory prove no effect or usable result exists.
 - If a Linear receipt comment may have been duplicated: inspect `brad_projection_outbox` and the comment idempotency marker before replaying. The bridge reconciles an existing marker instead of posting a second comment.
 

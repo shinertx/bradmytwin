@@ -73,15 +73,17 @@ The EA layer is autonomous for read/triage/organization work and conservative fo
 4. Source records preserve durable operating truth separately from volatile messages.
 5. Any external write still routes through the existing approval gate.
 
-## OpenClaw Telegram Heartbeat Flow
-1. Systemd starts `openclaw-gateway.service` on the GCP VM.
-2. Gateway binds to `127.0.0.1:18789` and returns `/readyz`.
-3. Telegram plugin starts long polling for the configured bot.
-4. Allowlisted Telegram user sends a DM command.
-5. OpenClaw logs inbound Telegram identity, runs the selected model, and sends a Telegram reply.
-6. Heartbeat checks confirm service readiness, Brad API/web health, Telegram provider startup, and latest inbound/reply proof.
+## Managed Kimi Telegram Flow
+1. The managed Kimi Claw named `Brad` runs the only active OpenClaw Telegram poller.
+2. An allowlisted Telegram owner sends Brad a private message.
+3. The managed Brad plugin verifies the exact account, owner, private-chat, and session binding before model execution.
+4. The plugin durably claims the objective in Brad/Postgres through the pinned forced-command SSH bridge.
+5. Brad returns a response only after the control plane settles it, then records the Telegram delivery receipt separately.
+6. Acceptance checks require one inbound record, one settled response, one confirmed delivery, and no duplicate poller or reply.
 
-The detailed operational source is [`OPENCLAW_TELEGRAM_HEARTBEAT.md`](./OPENCLAW_TELEGRAM_HEARTBEAT.md).
+The former GCP `openclaw-gateway.service` and `brad-watchdog.timer` were stopped and disabled on 2026-08-06. GCP still hosts the Brad API, Postgres, worker, and Hermes control plane; that control plane is not retired by the OpenClaw cutover.
+
+The current operational source is [`operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md`](./operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md). [`OPENCLAW_TELEGRAM_HEARTBEAT.md`](./OPENCLAW_TELEGRAM_HEARTBEAT.md) is retained as the GCP rollback-runtime record.
 
 Hermes usage and the Kimi Claw transition gates are documented in [`operations/HERMES_OPERATING_MODEL.md`](./operations/HERMES_OPERATING_MODEL.md) and [`operations/KIMI_CLAW_CUTOVER_CHECKLIST.md`](./operations/KIMI_CLAW_CUTOVER_CHECKLIST.md).
 

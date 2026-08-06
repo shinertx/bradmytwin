@@ -15,8 +15,14 @@ On 2026-08-06 the existing Telegram bot credential moved from the GCP rollback r
 - GCP `channels.telegram.enabled` is `false` and its Telegram account is absent from live channel status.
 - Managed Kimi reports Telegram `configured=true`, `running=true`, `tokenSource=tokenFile`, `mode=polling`, with a successful bot probe.
 - The GCP pre-cutover config is preserved at `/home/benjijmac/.openclaw/openclaw.json.pre-managed-telegram-cutover-20260806` with mode `0600`.
+- Seven managed `TELEGRAM` inbounds reached Brad/Postgres and settled on 2026-08-06, proving owner-to-Brad ingress and response generation.
+- All seven remain `RECONCILE_REQUIRED` with no delivery message ID, so Brad-to-owner Telegram delivery is not yet proven.
+- The GCP `openclaw-gateway.service` and `brad-watchdog.timer` are stopped and disabled. Brad API and worker startup dependencies on that gateway were removed; their previous unit files remain beside the active units with suffix `.pre-managed-kimi-openclaw-retirement-20260806`.
+- Brad API, worker, web, Linear/Hermes bridge, and Hermes services remained active after retirement, and `GET /healthz` on the API returned `{"ok":true,"service":"api"}`.
 
 Do not delete the managed token file or the GCP config backup during the observation window.
+
+Do not delete the GCP VM or its Brad/Postgres services. Managed Kimi still reaches the durable control plane on that host through the pinned forced-command SSH bridge. Retiring that remaining control plane requires a separate state migration and endpoint cutover.
 
 ## Pairing Gate
 
@@ -51,9 +57,12 @@ Continue only after Telegram is absent or reports `running=false`.
 On the GCP rollback host:
 
 ```bash
+cp /home/benjijmac/.config/systemd/user/brad-api.service.pre-managed-kimi-openclaw-retirement-20260806 /home/benjijmac/.config/systemd/user/brad-api.service
+cp /home/benjijmac/.config/systemd/user/brad-worker.service.pre-managed-kimi-openclaw-retirement-20260806 /home/benjijmac/.config/systemd/user/brad-worker.service
+systemctl --user daemon-reload
 cp /home/benjijmac/.openclaw/openclaw.json.pre-managed-telegram-cutover-20260806 /home/benjijmac/.openclaw/openclaw.json
 chmod 600 /home/benjijmac/.openclaw/openclaw.json
-systemctl --user restart openclaw-gateway
+systemctl --user enable --now openclaw-gateway.service brad-watchdog.timer
 openclaw channels status --probe --json
 ```
 
