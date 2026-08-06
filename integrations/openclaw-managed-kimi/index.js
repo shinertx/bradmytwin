@@ -175,6 +175,37 @@ function ownerProofFailure(identity, providers, principals) {
   return 'managed_kimi_owner_identity_mismatch';
 }
 
+function safeMetadataKeys(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'none';
+  const keys = Object.keys(value)
+    .filter((key) => /^[A-Za-z][A-Za-z0-9_]*$/.test(key))
+    .sort()
+    .slice(0, 64);
+  return keys.length > 0 ? keys.join(',') : 'none';
+}
+
+function safeOwnerContextShape(event, ctx) {
+  const channelContext = ctx?.channelContext;
+  const sender = channelContext && typeof channelContext === 'object'
+    ? channelContext.sender
+    : null;
+  const chat = channelContext && typeof channelContext === 'object'
+    ? channelContext.chat
+    : null;
+  return [
+    `event_keys=${safeMetadataKeys(event)}`,
+    `ctx_keys=${safeMetadataKeys(ctx)}`,
+    `channel_context_keys=${safeMetadataKeys(channelContext)}`,
+    `channel_sender_keys=${safeMetadataKeys(sender)}`,
+    `channel_chat_keys=${safeMetadataKeys(chat)}`,
+    `sender_is_owner=${event?.senderIsOwner === true}`,
+    `event_sender_present=${Boolean(normalizedString(event?.senderId))}`,
+    `ctx_sender_present=${Boolean(normalizedString(ctx?.senderId))}`,
+    `event_account_present=${Boolean(normalizedString(event?.accountId))}`,
+    `ctx_account_present=${Boolean(normalizedString(ctx?.accountId))}`
+  ].join(' ');
+}
+
 function boundedContextValue(values, maxLength, fallback = '') {
   for (const value of values) {
     const normalized = normalizedString(value);
@@ -285,6 +316,7 @@ export function createManagedKimiPlugin(options = {}) {
       const recoveryOwner = `openclaw-recovery:${randomId()}`;
       let recoveryTimer = null;
       let recoveryScanActive = false;
+      let ownerContextShapeLogged = false;
 
       const stopHeartbeat = (state) => {
         if (!state?.heartbeat) return;
@@ -658,6 +690,10 @@ export function createManagedKimiPlugin(options = {}) {
           return;
         } catch (error) {
           api.logger?.warn?.(`Brad managed intake blocked: ${safeClaimFailureCode(error)}`);
+          if (!ownerContextShapeLogged) {
+            api.logger?.warn?.(`Brad managed owner context shape: ${safeOwnerContextShape(event, ctx)}`);
+            ownerContextShapeLogged = true;
+          }
           return {
             outcome: 'block',
             reason: 'Brad intake was not durably claimed for an authenticated owner before model execution.',

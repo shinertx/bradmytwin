@@ -131,6 +131,14 @@ async function flushPromises() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+function assertSafeOwnerShapeWarning(message) {
+  assert.match(message, /^Brad managed owner context shape: event_keys=/);
+  assert.match(message, /ctx_keys=/);
+  assert.match(message, /channel_context_keys=/);
+  assert.match(message, /sender_is_owner=(?:true|false)/);
+  assert.doesNotMatch(message, /owner-1|conversation-1|objective|sensitive transport context/);
+}
+
 test('concurrent runs settle against their exact provider message and claim before final delivery', async () => {
   const intakeA = deferred();
   const intakeB = deferred();
@@ -386,9 +394,8 @@ test('run-id fallback is unavailable outside the exact managed Kimi channel', as
 
   assert.equal(result.outcome, 'block');
   assert.deepEqual(calls, []);
-  assert.deepEqual(api.warnings, [
-    'Brad managed intake blocked: managed_kimi_inbound_hooks_not_emitted'
-  ]);
+  assert.equal(api.warnings[0], 'Brad managed intake blocked: managed_kimi_inbound_hooks_not_emitted');
+  assertSafeOwnerShapeWarning(api.warnings[1]);
 });
 
 test('conflicting inbound hook correlations fail closed before intake', async () => {
@@ -411,9 +418,8 @@ test('conflicting inbound hook correlations fail closed before intake', async ()
 
   assert.equal(result.outcome, 'block');
   assert.deepEqual(calls, []);
-  assert.deepEqual(api.warnings, [
-    'Brad managed intake blocked: managed_kimi_inbound_correlation_conflict'
-  ]);
+  assert.equal(api.warnings[0], 'Brad managed intake blocked: managed_kimi_inbound_correlation_conflict');
+  assertSafeOwnerShapeWarning(api.warnings[1]);
 });
 
 test('unknown or non-owner execution signals fail closed before intake', async () => {
@@ -436,10 +442,9 @@ test('unknown or non-owner execution signals fail closed before intake', async (
     assert.equal(result.outcome, 'block');
   }
   assert.deepEqual(calls, []);
-  assert.deepEqual(api.warnings, [
-    'Brad managed intake blocked: managed_kimi_owner_identity_mismatch',
-    'Brad managed intake blocked: managed_kimi_owner_identity_mismatch'
-  ]);
+  assert.equal(api.warnings[0], 'Brad managed intake blocked: managed_kimi_owner_identity_mismatch');
+  assertSafeOwnerShapeWarning(api.warnings[1]);
+  assert.equal(api.warnings[2], 'Brad managed intake blocked: managed_kimi_owner_identity_mismatch');
 });
 
 test('managed Kimi account identity must match exactly and cannot authorize another account', async () => {
@@ -459,12 +464,11 @@ test('managed Kimi account identity must match exactly and cannot authorize anot
 
   assert.equal(result.outcome, 'block');
   assert.deepEqual(calls, []);
-  assert.deepEqual(api.warnings, [
-    'Brad managed intake blocked: managed_kimi_owner_identity_mismatch'
-  ]);
+  assert.equal(api.warnings[0], 'Brad managed intake blocked: managed_kimi_owner_identity_mismatch');
+  assertSafeOwnerShapeWarning(api.warnings[1]);
 });
 
-test('unexpected intake failures are logged only as a redacted stable code', async () => {
+test('unexpected intake failures log a redacted stable code and value-free metadata shape', async () => {
   const api = fakeApi();
   createManagedKimiPlugin({
     gateway: async () => {
@@ -474,7 +478,8 @@ test('unexpected intake failures are logged only as a redacted stable code', asy
 
   const { result } = await claimNormal(api, 'redacted-failure');
   assert.equal(result.outcome, 'block');
-  assert.deepEqual(api.warnings, ['Brad managed intake blocked: managed_kimi_claim_failed']);
+  assert.equal(api.warnings[0], 'Brad managed intake blocked: managed_kimi_claim_failed');
+  assertSafeOwnerShapeWarning(api.warnings[1]);
 });
 
 test('missing provider message id or session key fails closed', async () => {
