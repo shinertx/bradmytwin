@@ -369,9 +369,33 @@ export function createManagedKimiPlugin(options = {}) {
         return state;
       };
 
+      const buildManagedKimiRunFallback = (event, ctx, runId) => {
+        if (sourceChannel(event, ctx) !== 'KIMI') return null;
+        const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
+        const conversationId = boundedContextValue(
+          [ctx?.chatId, ctx?.channelId, event?.channelId, sessionKey],
+          512
+        );
+        return {
+          externalMessageId: `openclaw-run:${runId}`,
+          sessionKey,
+          conversationId,
+          senderId: boundedContextValue([event?.senderId, ctx?.senderId], 256),
+          accountId: boundedContextValue([event?.accountId, ctx?.accountId], 256),
+          provider: boundedContextValue(
+            [event?.channelId, ctx?.messageProvider, ctx?.channel],
+            128
+          ).toLowerCase(),
+          channel: 'KIMI',
+          correlationSource: 'before_agent_run',
+          createdAt: now()
+        };
+      };
+
       const claimNormalRun = async (event, ctx, runId) => {
-        const inbound = inboundStates.get(runId);
-        if (!inbound) throw new Error('managed_kimi_owner_proof_required');
+        const inbound = inboundStates.get(runId) ?? buildManagedKimiRunFallback(event, ctx, runId);
+        if (!inbound) throw new Error('managed_kimi_inbound_hooks_not_emitted');
+        if (!inboundStates.has(runId)) inboundStates.set(runId, inbound);
         if (inbound.correlationConflict) throw new Error('managed_kimi_inbound_correlation_conflict');
         const providers = boundedContextValues(
           [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel, inbound.provider],

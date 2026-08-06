@@ -340,6 +340,57 @@ test('message_received provides durable provider correlation when Kimi omits inb
   assert.equal(calls[0].payload.channel, 'KIMI');
 });
 
+test('managed Kimi uses the official stable run id when the channel emits no inbound hooks', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+  const ctx = kimiContext('no-inbound-hooks', { senderId: undefined });
+  const event = runEvent('managed run fallback', {
+    accountId: 'main',
+    senderId: undefined,
+    senderIsOwner: undefined
+  });
+
+  assert.equal(await api.handlers.get('before_agent_run')(event, ctx), undefined);
+  assert.equal(await api.handlers.get('before_agent_run')(event, ctx), undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].operation, 'intake');
+  assert.equal(calls[0].payload.externalMessageId, 'openclaw-run:no-inbound-hooks');
+  assert.equal(calls[0].payload.senderId, 'main');
+  assert.equal(calls[0].payload.channel, 'KIMI');
+});
+
+test('run-id fallback is unavailable outside the exact managed Kimi channel', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({ gateway: async (...args) => { calls.push(args); return claim('unsafe'); } }).register(api);
+  const ctx = kimiContext('web-without-inbound', {
+    messageProvider: 'web',
+    channel: 'web',
+    channelId: 'web-conversation',
+    senderId: 'owner-1'
+  });
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('must not run', {
+      channelId: 'web',
+      accountId: 'main',
+      senderIsOwner: true
+    }),
+    ctx
+  );
+
+  assert.equal(result.outcome, 'block');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(api.warnings, [
+    'Brad managed intake blocked: managed_kimi_inbound_hooks_not_emitted'
+  ]);
+});
+
 test('conflicting inbound hook correlations fail closed before intake', async () => {
   const calls = [];
   const api = fakeApi();
