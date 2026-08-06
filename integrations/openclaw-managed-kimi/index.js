@@ -190,7 +190,7 @@ function safeMetadataKeys(value) {
   return keys.length > 0 ? keys.join(',') : 'none';
 }
 
-function safeOwnerContextShape(event, ctx) {
+function safeOwnerContextShape(event, ctx, config) {
   const channelContext = ctx?.channelContext;
   const sender = channelContext && typeof channelContext === 'object'
     ? channelContext.sender
@@ -198,6 +198,9 @@ function safeOwnerContextShape(event, ctx) {
   const chat = channelContext && typeof channelContext === 'object'
     ? channelContext.chat
     : null;
+  const ownerSeparator = config.managedOwnerIdentity.indexOf(':');
+  const ownerPrincipal = config.managedOwnerIdentity.slice(ownerSeparator + 1);
+  const sessionKey = normalizedString(ctx?.sessionKey);
   return [
     `event_keys=${safeMetadataKeys(event)}`,
     `ctx_keys=${safeMetadataKeys(ctx)}`,
@@ -205,10 +208,15 @@ function safeOwnerContextShape(event, ctx) {
     `channel_sender_keys=${safeMetadataKeys(sender)}`,
     `channel_chat_keys=${safeMetadataKeys(chat)}`,
     `sender_is_owner=${event?.senderIsOwner === true}`,
+    `sender_is_non_owner=${event?.senderIsOwner === false}`,
     `event_sender_present=${Boolean(normalizedString(event?.senderId))}`,
     `ctx_sender_present=${Boolean(normalizedString(ctx?.senderId))}`,
     `event_account_present=${Boolean(normalizedString(event?.accountId))}`,
-    `ctx_account_present=${Boolean(normalizedString(ctx?.accountId))}`
+    `ctx_account_present=${Boolean(normalizedString(ctx?.accountId))}`,
+    `event_account_matches_owner=${normalizedString(event?.accountId).toLowerCase() === ownerPrincipal}`,
+    `session_is_boot=${sessionKey === `agent:${config.managedAgentId}:boot`}`,
+    `session_is_main=${sessionKey === `agent:${config.managedAgentId}:${ownerPrincipal}`}`,
+    `prompt_present=${Boolean(normalizedString(event?.prompt))}`
   ].join(' ');
 }
 
@@ -792,7 +800,7 @@ export function createManagedKimiPlugin(options = {}) {
         } catch (error) {
           api.logger?.warn?.(`Brad managed intake blocked: ${safeClaimFailureCode(error)}`);
           if (!ownerContextShapeLogged) {
-            api.logger?.warn?.(`Brad managed owner context shape: ${safeOwnerContextShape(event, ctx)}`);
+            api.logger?.warn?.(`Brad managed owner context shape: ${safeOwnerContextShape(event, ctx, config)}`);
             ownerContextShapeLogged = true;
           }
           return {
