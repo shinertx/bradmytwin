@@ -77,6 +77,13 @@ function normalizedString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function safeClaimFailureCode(error) {
+  const message = error instanceof Error ? normalizedString(error.message) : '';
+  return /^(?:managed_kimi|brad_gateway)_[a-z0-9_]+$/.test(message)
+    ? message
+    : 'managed_kimi_claim_failed';
+}
+
 function runIdFrom(...values) {
   for (const source of values) {
     const value = source?.runId;
@@ -530,7 +537,8 @@ export function createManagedKimiPlugin(options = {}) {
         try {
           await claimRun(event, ctx);
           return;
-        } catch {
+        } catch (error) {
+          api.logger?.warn?.(`Brad managed intake blocked: ${safeClaimFailureCode(error)}`);
           return {
             outcome: 'block',
             reason: 'Brad intake was not durably claimed for an authenticated owner before model execution.',

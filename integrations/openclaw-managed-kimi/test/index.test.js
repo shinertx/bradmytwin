@@ -25,10 +25,12 @@ function deferred() {
 function fakeApi(pluginConfig, scheduleSessionTurn = async () => undefined) {
   const resolvedConfig = arguments.length === 0 ? CONFIG : pluginConfig;
   const handlers = new Map();
+  const warnings = [];
   return {
     pluginConfig: resolvedConfig,
     handlers,
-    logger: { warn() {} },
+    warnings,
+    logger: { warn(message) { warnings.push(message); } },
     session: { workflow: { scheduleSessionTurn } },
     on(name, handler) {
       assert.equal(handlers.has(name), false, `duplicate hook ${name}`);
@@ -255,6 +257,23 @@ test('unknown or non-owner execution signals fail closed before intake', async (
     assert.equal(result.outcome, 'block');
   }
   assert.deepEqual(calls, []);
+  assert.deepEqual(api.warnings, [
+    'Brad managed intake blocked: managed_kimi_owner_proof_required',
+    'Brad managed intake blocked: managed_kimi_owner_proof_required'
+  ]);
+});
+
+test('unexpected intake failures are logged only as a redacted stable code', async () => {
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async () => {
+      throw new Error('network failure containing sensitive transport context');
+    }
+  }).register(api);
+
+  const { result } = await claimNormal(api, 'redacted-failure');
+  assert.equal(result.outcome, 'block');
+  assert.deepEqual(api.warnings, ['Brad managed intake blocked: managed_kimi_claim_failed']);
 });
 
 test('missing provider message id or session key fails closed', async () => {
