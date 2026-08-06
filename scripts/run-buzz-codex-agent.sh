@@ -14,14 +14,16 @@ set +a
 
 : "${BUZZ_BRIDGE_PUBKEY:?missing BUZZ_BRIDGE_PUBKEY}"
 : "${BUZZ_CHANNEL_ID:?missing BUZZ_CHANNEL_ID}"
+export BUZZ_PRIVATE_KEY="$(cat "$KEY_FILE")"
+export BUZZ_RELAY_URL="${BUZZ_RELAY_URL:-ws://127.0.0.1:3100}"
 
 exec /Applications/Buzz.app/Contents/MacOS/buzz-acp \
-  --private-key "$(cat "$KEY_FILE")" \
-  --relay-url "${BUZZ_RELAY_URL:-ws://127.0.0.1:3100}" \
+  --private-key "$BUZZ_PRIVATE_KEY" \
+  --relay-url "$BUZZ_RELAY_URL" \
   --agent-owner "$BUZZ_BRIDGE_PUBKEY" \
   --agent-command /opt/homebrew/bin/codex-acp \
   --agent-args '' \
-  --permission-mode default \
+  --permission-mode dont-ask \
   --respond-to owner-only \
   --allowed-respond-to owner-only \
   --subscribe mentions \

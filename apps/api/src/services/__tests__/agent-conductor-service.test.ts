@@ -126,13 +126,24 @@ describe('AgentConductorService', () => {
 
   it('accepts a deferred critique only for the exact waiting agent and only once', async () => {
     if (!pool) return;
-    const source = await seedSource(pool, PERSON_A, 'Run a signed bridge test.');
-    const created = await service.intake({ personId: PERSON_A, sourceMessageId: source, text: 'Run a signed bridge test.', sourceChannel: 'WEB' });
+    const objective = 'Run a signed bridge test and include the exact marker BRIDGE_PROOF_OK.';
+    const source = await seedSource(pool, PERSON_A, objective);
+    const created = await service.intake({ personId: PERSON_A, sourceMessageId: source, text: objective, sourceChannel: 'WEB' });
     const job = await pool.query<{ id: string }>(`SELECT id FROM brad_agent_jobs WHERE thread_id = $1`, [created!.threadId]);
     await pool.query(`UPDATE brad_agent_jobs SET status = 'WAITING', assigned_agent_id = 'codex' WHERE id = $1`, [job.rows[0].id]);
     expect(await service.ingestDeferredAgentReply({ jobId: job.rows[0].id, agentId: 'claude', buzzEventId: 'evt-wrong', text: 'wrong signer' })).toBeNull();
     const accepted = await service.ingestDeferredAgentReply({ jobId: job.rows[0].id, agentId: 'codex', buzzEventId: 'evt-right', text: 'Require independent proof.' });
     expect(accepted).toMatchObject({ threadId: created!.threadId, nextAgentId: 'hermes' });
     expect(await service.ingestDeferredAgentReply({ jobId: job.rows[0].id, agentId: 'codex', buzzEventId: 'evt-right', text: 'duplicate' })).toBeNull();
+    const nextJob = await pool.query<{ request_json: Record<string, unknown> }>(
+      `SELECT request_json FROM brad_agent_jobs WHERE thread_id = $1 AND assigned_agent_id = 'hermes'`,
+      [created!.threadId]
+    );
+    expect(nextJob.rows[0].request_json).toMatchObject({
+      stage: 'AFTER_CODEX',
+      objective,
+      priorResult: 'Require independent proof.',
+      verificationContract: { kind: 'EXACT_MARKER', expected: 'BRIDGE_PROOF_OK' }
+    });
   });
 });

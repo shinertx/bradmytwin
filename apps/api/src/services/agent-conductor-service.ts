@@ -474,8 +474,9 @@ export class AgentConductorService {
         trigger_message_id: string;
         assigned_agent_id: 'codex' | 'claude';
         status: string;
+        request_json: Record<string, unknown>;
       }>(
-        `SELECT id, person_id, thread_id, trigger_message_id, assigned_agent_id, status
+        `SELECT id, person_id, thread_id, trigger_message_id, assigned_agent_id, status, request_json
          FROM brad_agent_jobs WHERE id = $1 FOR UPDATE`,
         [input.jobId]
       );
@@ -538,7 +539,14 @@ export class AgentConductorService {
         threadId: thread.id,
         triggerMessageId: message.id,
         assignedAgentId: nextAgent,
-        request: { stage: `AFTER_${input.agentId.toUpperCase()}`, text: input.text },
+        request: {
+          stage: `AFTER_${input.agentId.toUpperCase()}`,
+          objective: typeof job.request_json.objective === 'string' ? job.request_json.objective : input.text,
+          priorResult: input.text,
+          ...(typeof job.request_json.verificationContract === 'object'
+            ? { verificationContract: job.request_json.verificationContract }
+            : {})
+        },
         idempotencyKey: `next:${job.id}:${nextAgent}`
       });
       await client.query('COMMIT');
