@@ -21,6 +21,7 @@ JENNI is excluded by the default authority envelope. External sends, spending, p
 - Agent replies cannot increase the stored authority envelope.
 - Eight consecutive agent turns stop with `LOOP_BUDGET_EXHAUSTED`.
 - An expired pre-run lease may be requeued. An expired running turn becomes `RECONCILE_REQUIRED`.
+- On a known singleton-worker restart, interrupted work with `externalEffectsAllowed=false` is reclaimed immediately. Work that may have produced an external effect is quarantined for reconciliation instead of replayed.
 - Ambiguous external writes remain `reconcile_required`; they are never blindly replayed.
 - Owner messages reset the agent-turn counter.
 - Buzz replies are accepted only through the authenticated bridge and only for the exact waiting job and assigned agent.
@@ -41,7 +42,7 @@ JENNI is excluded by the default authority envelope. External sends, spending, p
 
 ## Promotion Gate
 
-Keep `BRAD_CONDUCTOR_MODE=shadow` until all tests pass:
+Keep normal Telegram and API intake in `shadow` until all tests pass. The worker may remain active for explicitly created managed-Kimi candidate jobs:
 
 - zero lost objectives;
 - zero unauthorized or duplicate effects;
@@ -61,7 +62,7 @@ Rollback is one configuration change: restore `BRAD_CONDUCTOR_MODE=shadow` and r
 
 ## Managed Kimi Bridge Contract
 
-The non-bundled `brad-managed-kimi` plugin must be loaded only on OpenClaw `2026.7.1-2` or newer with this policy shape:
+The non-bundled `brad-managed-kimi` plugin must be loaded only on a supported managed OpenClaw runtime with this policy shape:
 
 ```json
 {
@@ -72,15 +73,17 @@ The non-bundled `brad-managed-kimi` plugin must be loaded only on OpenClaw `2026
   },
   "config": {
     "managedAgentId": "main",
+    "managedMainAccountDigest": "<sha256-account-fingerprint>",
+    "managedOwnerIdentity": "kimi-claw:main",
     "modelProvider": "kimi-coding",
-    "model": "k2p6",
-    "recoveryEnabled": false
+    "model": "k3",
+    "recoveryEnabled": true
   }
 }
 ```
 
-Use `recoveryEnabled: false` in isolated staging. Change it to `true` only on the single promoted managed runtime after staging proves that it cannot claim production work or consume Telegram.
+Use `recoveryEnabled: false` in isolated staging. The guarded candidate uses `true` only after exact account fingerprinting, cross-context claim persistence, stale-run rejection, and recovery tests pass. It must not consume Telegram.
 
 The bridge uses the provider message ID for durable deduplication, requires an explicit trusted-owner signal, settles the executive response in Postgres before final delivery, blocks all unclaimed tools, renews live claims, and reschedules expired work into the original OpenClaw session. The recovery claim token stays in plugin memory and is rotated to the exact resumed run before model execution.
 
-The verified managed provider/model identity is `kimi-coding/k2p6`. Do not relabel that runtime as `moonshot/kimi-k3` without a fresh runtime canary that reports that exact provider and model.
+Kimi's current official K3 identity is `kimi-coding/k3` with a `1.0m` context. Do not label the candidate K3 until a fresh live `session_status` proves both values; the current durable Brad record proves the executive response and account identity, not the provider model field.

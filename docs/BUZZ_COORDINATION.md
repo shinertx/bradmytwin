@@ -53,6 +53,7 @@ an API response is not customer-live; a payment submission is not settled.
 - Keep one private **Brad Control Room** for cross-agent coordination and owner decisions.
 - Create separate project rooms only when a project needs independent access, history, or retention.
 - Tag the responsible worker in a request. Do not broadcast every message to every agent.
+- Only `DELEGATE` messages wake a specialist. Results and critiques remain visible in the room without re-notifying Codex or Claude.
 - Agents respond to owner messages or exact Brad Conductor assignments only. The Mac bridge binds each accepted reply to the waiting job, expected agent identity, and Buzz event.
 - Do not copy credentials, tokens, full private records, or sensitive personal data into Buzz.
 - Avoid acknowledgement loops. A reply must contain a decision, evidence, blocker, or next action.
@@ -101,7 +102,7 @@ Do not call the full system "working" when only the relay or desktop UI is up.
 
 ## Buzz Release Alignment
 
-- Production requires Buzz Desktop `0.5.5` or newer after identity backup and a signed canary. `0.5.3` is the observed baseline, not the promotion target.
+- Buzz Desktop `0.5.5` is installed. The dedicated Brad bridge and separately signed Codex agent are running as launchd services.
 - The local Buzz source checkout is clean and synchronized with `origin/main`;
   do not replace the signed Desktop app with an untagged development build.
 - Keep reply/liveness protection enabled where the selected harness supports it.
@@ -110,6 +111,7 @@ Do not call the full system "working" when only the relay or desktop UI is up.
 - Keep ACP heartbeats disabled by default. Existing scheduled automations are
   the explicit heartbeat layer; an ACP self-prompt loop would add duplicate
   work and could create action noise.
+- The automatic V4 conversation canary produced exactly one Codex notification and a signed critique, followed by Hermes revision and verifier closure. Duplicate notification is a failed proof.
 - Create and verify a local encrypted Buzz identity backup before treating the
   Desktop identity as recoverable. The backup passphrase must be chosen and
   retained by the owner; it must never be generated into logs or committed
