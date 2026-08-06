@@ -5,6 +5,7 @@ import { createManagedKimiPlugin } from '../index.js';
 
 const CONFIG = {
   managedAgentId: 'brad-runtime',
+  managedOwnerIdentity: 'kimi-claw:main',
   modelProvider: 'kimi-coding',
   model: 'k2p6',
   recoveryEnabled: false
@@ -237,6 +238,30 @@ test('owner proof from before_agent_run joins inbound correlation before intake'
   assert.equal(calls[0].payload.senderId, 'owner-from-agent-run');
 });
 
+test('exact managed Kimi identity compensates for the connector owner-bit gap', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+
+  const ctx = kimiContext('managed-owner-fallback', {
+    messageProvider: 'kimi-claw',
+    senderId: 'main'
+  });
+  await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('managed owner fallback', { senderId: 'main', senderIsOwner: false }),
+    ctx
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(calls[0].payload.senderId, 'main');
+});
+
 test('unknown or non-owner execution signals fail closed before intake', async () => {
   const calls = [];
   const api = fakeApi();
@@ -248,7 +273,7 @@ test('unknown or non-owner execution signals fail closed before intake', async (
   }).register(api);
 
   for (const [runId, senderIsOwner] of [['unknown-owner', undefined], ['non-owner', false]]) {
-    const ctx = kimiContext(runId);
+    const ctx = kimiContext(runId, { senderId: 'not-the-managed-owner' });
     await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
     const event = runEvent('must not run');
     if (senderIsOwner === undefined) delete event.senderIsOwner;
@@ -605,6 +630,10 @@ test('registration rejects missing, malformed, unknown, or unsafe recovery confi
   assert.throws(
     () => plugin.register(fakeApi({ ...CONFIG, modelProvider: 'kimi provider' })),
     /valid pluginConfig.modelProvider/
+  );
+  assert.throws(
+    () => plugin.register(fakeApi({ ...CONFIG, managedOwnerIdentity: 'kimi claw main' })),
+    /valid pluginConfig.managedOwnerIdentity/
   );
   assert.throws(
     () => plugin.register(fakeApi({ ...CONFIG, recoveryEnabled: 'yes' })),

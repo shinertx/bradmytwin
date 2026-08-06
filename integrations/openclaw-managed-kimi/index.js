@@ -11,7 +11,13 @@ const CLAIM_RENEW_INTERVAL_MS = 60 * 1000;
 const RECOVERY_SCAN_INTERVAL_MS = 2 * 60 * 1000;
 const MAX_RECOVERIES_PER_SCAN = 20;
 const RECOVERY_PACKET_PREFIX = 'BRAD_RECOVERY_PACKET_V1:';
-const CONFIG_KEYS = new Set(['managedAgentId', 'modelProvider', 'model', 'recoveryEnabled']);
+const CONFIG_KEYS = new Set([
+  'managedAgentId',
+  'managedOwnerIdentity',
+  'modelProvider',
+  'model',
+  'recoveryEnabled'
+]);
 const BRAD_EXECUTIVE_SYSTEM_CONTEXT = [
   'You are Brad, Ben\'s Kimi-powered executive identity inside a durable multi-agent control plane.',
   'Treat every normal owner message as an objective. Reason proportionally using: objective, binding constraint, hidden assumption, strongest candidate, strongest attack, repaired decision, and decisive proof test.',
@@ -119,6 +125,12 @@ function parsePluginConfig(pluginConfig) {
   }
   return Object.freeze({
     managedAgentId: configString(pluginConfig, 'managedAgentId', /^[A-Za-z0-9][A-Za-z0-9._-]*$/, 128),
+    managedOwnerIdentity: configString(
+      pluginConfig,
+      'managedOwnerIdentity',
+      /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+      384
+    ).toLowerCase(),
     modelProvider: configString(pluginConfig, 'modelProvider', /^[A-Za-z0-9][A-Za-z0-9._-]*$/, 128),
     model: configString(pluginConfig, 'model', /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 256),
     recoveryEnabled: pluginConfig.recoveryEnabled
@@ -335,8 +347,16 @@ export function createManagedKimiPlugin(options = {}) {
 
       const claimNormalRun = async (event, ctx, runId) => {
         const inbound = inboundStates.get(runId);
-        if (!inbound || event?.senderIsOwner !== true) throw new Error('managed_kimi_owner_proof_required');
+        if (!inbound) throw new Error('managed_kimi_owner_proof_required');
+        const provider = boundedContextValue(
+          [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel, inbound.provider],
+          128
+        ).toLowerCase();
         const senderId = boundedContextValue([event?.senderId, inbound.senderId], 256);
+        const managedIdentity = provider && senderId ? `${provider}:${senderId}`.toLowerCase() : '';
+        const ownerVerified = event?.senderIsOwner === true
+          || (inbound.channel === 'KIMI' && managedIdentity === config.managedOwnerIdentity);
+        if (!ownerVerified) throw new Error('managed_kimi_owner_proof_required');
         if (!inbound.externalMessageId || !inbound.sessionKey || !inbound.conversationId || !senderId) {
           throw new Error('managed_kimi_inbound_correlation_required');
         }
@@ -503,11 +523,16 @@ export function createManagedKimiPlugin(options = {}) {
           512
         );
         const senderId = boundedContextValue([event?.senderId, ctx?.senderId], 256);
+        const provider = boundedContextValue(
+          [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel],
+          128
+        ).toLowerCase();
         const next = {
           externalMessageId,
           sessionKey,
           conversationId,
           senderId,
+          provider,
           channel: sourceChannel(event, ctx),
           createdAt: now()
         };
