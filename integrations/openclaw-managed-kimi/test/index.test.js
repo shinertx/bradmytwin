@@ -256,6 +256,30 @@ test('provider message id, not run id, is the durable dedupe identity', async ()
   );
 });
 
+test('managed Kimi queued-message wrappers never contaminate the durable owner objective', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return claim('normalized-wrapper');
+    }
+  }).register(api);
+  const ownerPrompt = 'Audit the Brad control plane from first principles.';
+  const wrappedPrompt = [
+    '[Queued user message that arrived while the previous turn was still active]',
+    'A stale transport error from the previous turn.',
+    '',
+    'User Message From Kimi:',
+    '[Time: [2026-08-06 Thu 19:04:49 GMT+8]]',
+    ownerPrompt
+  ].join('\n');
+
+  await claimFromMessageReceived(api, 'normalized-wrapper', wrappedPrompt);
+
+  assert.equal(calls.find((call) => call.operation === 'intake')?.payload.text, ownerPrompt);
+});
+
 test('owner proof from before_agent_run joins inbound correlation before intake', async () => {
   const calls = [];
   const api = fakeApi();

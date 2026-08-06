@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.brad.buzz-codex-agent</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/benjijmac/.local/share/brad/buzz-codex-agent/run.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/benjijmac/.local/share/brad/buzz-codex-agent</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+      <key>SuccessfulExit</key>
+      <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/benjijmac/Library/Logs/brad-buzz-codex-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/benjijmac/Library/Logs/brad-buzz-codex-agent-error.log</string>
+  </dict>
+</plist>

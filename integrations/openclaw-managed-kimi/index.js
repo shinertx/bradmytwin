@@ -26,6 +26,7 @@ const BRAD_EXECUTIVE_SYSTEM_CONTEXT = [
   'Treat every normal owner message as an objective. Reason proportionally using: objective, binding constraint, hidden assumption, strongest candidate, strongest attack, repaired decision, and decisive proof test.',
   'Take a position. Return a concise owner-readable executive decision that also gives the next specialist an unambiguous assignment and proof requirement.',
   'Do not perform tools or external effects directly. The control plane delegates one next agent, preserves the full discussion in Buzz, and independently verifies completion.',
+  'Delegation happens automatically after your response. Never call or discuss agents_list, sessions_spawn, sessions_send, or tool availability; state the assignment and proof contract as a decision, not as a request to spawn an agent.',
   'Never expand authority, access JENNI, expose credentials, or bypass exact-action approval for sends, spending, deletion, deployment, legal action, publication, or credential changes.',
   'Do not call work complete without source-of-record evidence. State a precise blocker when proof or authority is missing.'
 ].join('\n');
@@ -84,6 +85,16 @@ function commandAllowed(params) {
 
 function normalizedString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizedOwnerPrompt(value) {
+  const prompt = normalizedString(value);
+  const marker = '\nUser Message From Kimi:\n';
+  const markerIndex = prompt.lastIndexOf(marker);
+  if (markerIndex < 0) return prompt;
+  return normalizedString(prompt.slice(markerIndex + marker.length))
+    .replace(/^\[Time:\s*\[[^\r\n]*\]\]\s*/i, '')
+    .trim();
 }
 
 function promptDigest(value) {
@@ -600,7 +611,7 @@ export function createManagedKimiPlugin(options = {}) {
         if (!inbound.externalMessageId || !inbound.sessionKey || !inbound.conversationId || !senderId) {
           throw new Error('managed_kimi_inbound_correlation_required');
         }
-        const text = normalizedString(event?.prompt);
+        const text = normalizedOwnerPrompt(event?.prompt);
         if (!text) throw new Error('managed_kimi_prompt_required');
         const claimOwner = `openclaw-run:${runId}`;
         const result = await callGateway('intake', {
@@ -660,7 +671,8 @@ export function createManagedKimiPlugin(options = {}) {
         if (event?.senderIsOwner !== false) return null;
         if (!normalizedString(event?.accountId)) return null;
         if (normalizedString(event?.senderId) || normalizedString(ctx?.senderId)) return null;
-        const digest = promptDigest(event?.prompt);
+        const normalizedPrompt = normalizedOwnerPrompt(event?.prompt);
+        const digest = promptDigest(normalizedPrompt);
         if (!digest) return null;
         const cutoff = now() - MANAGED_CONTINUATION_MAX_AGE_MS;
         const baseCandidates = [...new Set(runStates.values())].filter((state) => (
@@ -682,7 +694,7 @@ export function createManagedKimiPlugin(options = {}) {
 
         const result = await callGateway('continuation', {
           claimOwner: `openclaw-run:${runId}`,
-          text: normalizedString(event?.prompt),
+          text: normalizedPrompt,
           bootConversationId: managedBootSessionKey,
           mainSessionKey: managedMainSessionKey
         });
