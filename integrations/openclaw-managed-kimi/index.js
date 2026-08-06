@@ -214,6 +214,8 @@ function safeOwnerContextShape(event, ctx, config) {
     `event_account_present=${Boolean(normalizedString(event?.accountId))}`,
     `ctx_account_present=${Boolean(normalizedString(ctx?.accountId))}`,
     `event_account_matches_owner=${normalizedString(event?.accountId).toLowerCase() === ownerPrincipal}`,
+    `event_account_length=${normalizedString(event?.accountId).length}`,
+    `event_account_digest=${promptDigest(event?.accountId)}`,
     `session_is_boot=${sessionKey === `agent:${config.managedAgentId}:boot`}`,
     `session_is_main=${sessionKey === `agent:${config.managedAgentId}:${ownerPrincipal}`}`,
     `prompt_present=${Boolean(normalizedString(event?.prompt))}`
