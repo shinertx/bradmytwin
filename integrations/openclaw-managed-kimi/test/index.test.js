@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { createManagedKimiPlugin } from '../index.js';
 
 const CONFIG = {
   managedAgentId: 'brad-runtime',
+  managedMainAccountDigest: createHash('sha256').update('internal-managed-account').digest('hex'),
   managedOwnerIdentity: 'kimi-claw:main',
   modelProvider: 'kimi-coding',
   model: 'k2p6',
@@ -575,6 +577,71 @@ test('managed Kimi continuation resumes a boot claim across isolated plugin cont
   });
 });
 
+test('persistent managed Kimi main session authenticates by its configured account fingerprint', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      if (operation === 'continuation') return { ok: true, assignment: null };
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+  const ctx = kimiContext('persistent-main', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    chatId: undefined,
+    senderId: undefined,
+    sessionKey: `agent:${CONFIG.managedAgentId}:main`
+  });
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('persistent managed objective', {
+      channelId: undefined,
+      senderId: undefined,
+      accountId: 'internal-managed-account',
+      senderIsOwner: false
+    }),
+    ctx
+  );
+
+  assert.equal(result, undefined);
+  assert.deepEqual(calls.map((call) => call.operation), ['continuation', 'intake']);
+  assert.equal(calls[1].payload.senderId, 'main');
+  assert.equal(calls[1].payload.channel, 'KIMI');
+  assert.equal(calls[1].payload.sessionKey, `agent:${CONFIG.managedAgentId}:main`);
+});
+
+test('persistent managed Kimi main session rejects a foreign account fingerprint', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return { ok: true, assignment: null };
+    }
+  }).register(api);
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('must not run', {
+      channelId: undefined,
+      senderId: undefined,
+      accountId: 'foreign-managed-account',
+      senderIsOwner: false
+    }),
+    kimiContext('foreign-persistent-main', {
+      messageProvider: undefined,
+      channel: undefined,
+      channelId: undefined,
+      chatId: undefined,
+      senderId: undefined,
+      sessionKey: `agent:${CONFIG.managedAgentId}:main`
+    })
+  );
+
+  assert.equal(result.outcome, 'block');
+  assert.deepEqual(calls.map((call) => call.operation), ['continuation']);
+});
+
 test('managed Kimi continuation rejects prompt, missing-account, and time-window mismatches', async () => {
   let currentTime = 1_000;
   const calls = [];
@@ -1096,6 +1163,10 @@ test('registration rejects missing, malformed, unknown, or unsafe recovery confi
   assert.throws(
     () => plugin.register(fakeApi({ ...CONFIG, managedOwnerIdentity: 'kimi claw main' })),
     /valid pluginConfig.managedOwnerIdentity/
+  );
+  assert.throws(
+    () => plugin.register(fakeApi({ ...CONFIG, managedMainAccountDigest: 'not-a-digest' })),
+    /valid pluginConfig.managedMainAccountDigest/
   );
   assert.throws(
     () => plugin.register(fakeApi({ ...CONFIG, recoveryEnabled: 'yes' })),

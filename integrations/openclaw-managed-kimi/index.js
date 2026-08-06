@@ -14,6 +14,7 @@ const MANAGED_CONTINUATION_MAX_AGE_MS = 30 * 1000;
 const RECOVERY_PACKET_PREFIX = 'BRAD_RECOVERY_PACKET_V1:';
 const CONFIG_KEYS = new Set([
   'managedAgentId',
+  'managedMainAccountDigest',
   'managedOwnerIdentity',
   'modelProvider',
   'model',
@@ -131,6 +132,12 @@ function parsePluginConfig(pluginConfig) {
   }
   return Object.freeze({
     managedAgentId: configString(pluginConfig, 'managedAgentId', /^[A-Za-z0-9][A-Za-z0-9._-]*$/, 128),
+    managedMainAccountDigest: configString(
+      pluginConfig,
+      'managedMainAccountDigest',
+      /^[0-9a-f]{64}$/,
+      64
+    ).toLowerCase(),
     managedOwnerIdentity: configString(
       pluginConfig,
       'managedOwnerIdentity',
@@ -214,8 +221,7 @@ function safeOwnerContextShape(event, ctx, config) {
     `event_account_present=${Boolean(normalizedString(event?.accountId))}`,
     `ctx_account_present=${Boolean(normalizedString(ctx?.accountId))}`,
     `event_account_matches_owner=${normalizedString(event?.accountId).toLowerCase() === ownerPrincipal}`,
-    `event_account_length=${normalizedString(event?.accountId).length}`,
-    `event_account_digest=${promptDigest(event?.accountId)}`,
+    `event_account_matches_managed_digest=${promptDigest(event?.accountId) === config.managedMainAccountDigest}`,
     `session_is_boot=${sessionKey === `agent:${config.managedAgentId}:boot`}`,
     `session_is_main=${sessionKey === `agent:${config.managedAgentId}:${ownerPrincipal}`}`,
     `prompt_present=${Boolean(normalizedString(event?.prompt))}`
@@ -339,6 +345,14 @@ export function createManagedKimiPlugin(options = {}) {
       const managedBootSessionKey = `agent:${config.managedAgentId}:boot`;
       const managedMainSessionKey = `agent:${config.managedAgentId}:${configuredOwnerPrincipal}`;
 
+      const isAuthenticatedManagedMainRun = (event, ctx) => (
+        boundedContextValue([ctx?.sessionKey], 512) === managedMainSessionKey
+        && event?.senderIsOwner === false
+        && !normalizedString(event?.senderId)
+        && !normalizedString(ctx?.senderId)
+        && promptDigest(event?.accountId) === config.managedMainAccountDigest
+      );
+
       const stopHeartbeat = (state) => {
         if (!state?.heartbeat) return;
         cancelInterval(state.heartbeat);
@@ -445,7 +459,10 @@ export function createManagedKimiPlugin(options = {}) {
         const authenticatedOwnerWithoutIdentity = detectedChannel === 'WEB'
           && explicitProviders.length === 0
           && event?.senderIsOwner === true;
-        if (detectedChannel !== 'KIMI' && !authenticatedOwnerWithoutIdentity) return null;
+        const authenticatedManagedMain = isAuthenticatedManagedMainRun(event, ctx);
+        if (detectedChannel !== 'KIMI' && !authenticatedOwnerWithoutIdentity && !authenticatedManagedMain) {
+          return null;
+        }
         const configuredProvider = config.managedOwnerIdentity.slice(0, ownerSeparator);
         const configuredPrincipal = configuredOwnerPrincipal;
         const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
@@ -458,7 +475,11 @@ export function createManagedKimiPlugin(options = {}) {
           sessionKey,
           conversationId,
           senderId: boundedContextValue(
-            [event?.senderId, ctx?.senderId, authenticatedOwnerWithoutIdentity ? configuredPrincipal : ''],
+            [
+              event?.senderId,
+              ctx?.senderId,
+              authenticatedOwnerWithoutIdentity || authenticatedManagedMain ? configuredPrincipal : ''
+            ],
             256
           ),
           accountId: boundedContextValue(
@@ -470,13 +491,15 @@ export function createManagedKimiPlugin(options = {}) {
               event?.channelId,
               ctx?.messageProvider,
               ctx?.channel,
-              authenticatedOwnerWithoutIdentity ? configuredProvider : ''
+              authenticatedOwnerWithoutIdentity || authenticatedManagedMain ? configuredProvider : ''
             ],
             128
           ).toLowerCase(),
           channel: 'KIMI',
           correlationSource: authenticatedOwnerWithoutIdentity
             ? 'before_agent_run_owner_verdict'
+            : authenticatedManagedMain
+              ? 'before_agent_run_managed_main'
             : 'before_agent_run',
           createdAt: now()
         };
@@ -504,12 +527,16 @@ export function createManagedKimiPlugin(options = {}) {
           providers,
           principals
         );
-        const senderId = managedPrincipal || principals[0] || '';
+        const authenticatedManagedMain = isAuthenticatedManagedMainRun(event, ctx);
+        const senderId = managedPrincipal
+          || (authenticatedManagedMain ? configuredOwnerPrincipal : principals[0])
+          || '';
         const channel = inbound.correlationSource === 'message_received' && inbound.channel === 'WEB'
           ? sourceChannel(event, ctx)
           : inbound.channel;
         const ownerVerified = event?.senderIsOwner === true
-          || (channel === 'KIMI' && Boolean(managedPrincipal));
+          || (channel === 'KIMI' && Boolean(managedPrincipal))
+          || authenticatedManagedMain;
         if (!ownerVerified) {
           throw new Error(ownerProofFailure(config.managedOwnerIdentity, providers, principals));
         }
