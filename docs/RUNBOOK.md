@@ -112,4 +112,8 @@ Automated Linear dispatch requires an issue in `In Progress` with both `Hermes` 
 7. Run the runtime, conversation, restart, loop, safety, reconciliation, and two-person isolation canaries.
 8. Set `BRAD_CONDUCTOR_MODE=active` only after the documented promotion threshold passes.
 
+### Managed Kimi Telegram ownership
+
+Use [`docs/operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md`](./operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md) for channel ownership and rollback. Never enable the GCP and managed-Kimi Telegram pollers together. A successful Bot API probe is necessary but insufficient; require an owner round trip plus a matching durable Brad thread before calling the channel live.
+
 Immediate rollback: set `BRAD_CONDUCTOR_MODE=shadow` and restart API/worker. Do not delete agent tables; they are the recovery and audit record.

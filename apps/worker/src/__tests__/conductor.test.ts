@@ -1,7 +1,7 @@
 import { AGENT_IDS, defaultAuthorityEnvelope, type AgentId } from '@brad/domain';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -142,6 +142,15 @@ async function runGateway(command: string): Promise<Record<string, unknown>> {
   return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
 }
 
+async function runGatewayRaw(command: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<string> {
+  const result = await execFileAsync(process.execPath, [path.join(REPO_ROOT, 'tools/kimi-brad-gateway.mjs')], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, ...extraEnv, DATABASE_URL, SSH_ORIGINAL_COMMAND: command },
+    timeout: 30_000
+  });
+  return result.stdout;
+}
+
 async function runGatewayFailure(command: string): Promise<Record<string, unknown>> {
   try {
     const result = await runGateway(command);
@@ -205,6 +214,56 @@ describe('Brad multi-agent conductor', () => {
     await pool.query(`TRUNCATE brad_agent_outbox, brad_agent_evaluations, brad_agent_jobs, brad_agent_sessions,
       brad_agent_messages, brad_agent_thread_participants, brad_agent_threads, brad_objective_checkpoints,
       brad_objective_attempts, brad_objectives, messages, threads, persons CASCADE`);
+  });
+
+  it('transfers the Telegram token through one expiring single-use grant', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'brad-telegram-bootstrap-'));
+    const configPath = path.join(root, 'openclaw.json');
+    const secretsPath = path.join(root, 'local-secrets.json');
+    const grantPath = path.join(root, 'grant.json');
+    const nonce = 'A'.repeat(43);
+    const token = '8733489473:abcdefghijklmnopqrstuvwxyz_ABCD1234567890';
+    try {
+      await writeFile(secretsPath, JSON.stringify({ telegramBotToken: token }), { mode: 0o600 });
+      await chmod(secretsPath, 0o600);
+      await writeFile(configPath, JSON.stringify({
+        channels: { telegram: { botToken: { source: 'file', provider: 'local', id: '/telegramBotToken' } } },
+        secrets: { providers: { local: { source: 'file', path: secretsPath } } }
+      }), { mode: 0o600 });
+      await writeFile(grantPath, JSON.stringify({
+        purpose: 'telegram-managed-kimi-bootstrap-v1',
+        nonceSha256: sha256(nonce),
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+      }), { mode: 0o600 });
+      await chmod(grantPath, 0o600);
+
+      const env = {
+        BRAD_ENABLE_TELEGRAM_BOOTSTRAP: 'true',
+        BRAD_OPENCLAW_CONFIG_PATH: configPath,
+        BRAD_TELEGRAM_BOOTSTRAP_GRANT_PATH: grantPath
+      };
+      const attempts = await Promise.allSettled([
+        runGatewayRaw(`telegram-bootstrap ${nonce}`, env),
+        runGatewayRaw(`telegram-bootstrap ${nonce}`, env)
+      ]);
+      expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+      expect(attempts.find((attempt) => attempt.status === 'fulfilled')).toMatchObject({ value: token });
+      const failure = attempts.find((attempt) => attempt.status === 'rejected');
+      expect(failure).toBeDefined();
+      expect(JSON.stringify(failure)).not.toContain(token);
+      await expect(runGatewayRaw(`telegram-bootstrap ${nonce}`, env)).rejects.toMatchObject({
+        stdout: expect.stringContaining('bootstrap_grant_unavailable')
+      });
+
+      await expect(runGatewayRaw(`telegram-bootstrap ${nonce}`, {
+        ...env,
+        BRAD_ENABLE_TELEGRAM_BOOTSTRAP: 'false'
+      })).rejects.toMatchObject({
+        stdout: expect.stringContaining('telegram_bootstrap_disabled')
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('runs executive, operator, critic, revision, verifier and closes only on evidence', async () => {

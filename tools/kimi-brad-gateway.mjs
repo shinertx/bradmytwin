@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { createHash, randomUUID } from 'node:crypto';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import {
   authorityViolation,
   buildFirstPrinciplesBrief,
@@ -17,7 +17,14 @@ dotenv.config({ path: process.env.BRAD_ENV_PATH ?? '/home/benjijmac/bradmytwin/.
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
 const ARTIFACT_ROOT = process.env.BRAD_ARTIFACT_ROOT ?? '/home/benjijmac/server-audits/brad-hermes-jobs/';
+const OPENCLAW_CONFIG_PATH = process.env.BRAD_OPENCLAW_CONFIG_PATH ?? '/home/benjijmac/.openclaw/openclaw.json';
+const TELEGRAM_BOOTSTRAP_GRANT_PATH = process.env.BRAD_TELEGRAM_BOOTSTRAP_GRANT_PATH
+  ?? '/home/benjijmac/.openclaw/secrets/telegram-managed-kimi-bootstrap.json';
+const TELEGRAM_BOOTSTRAP_ENABLED = process.env.BRAD_ENABLE_TELEGRAM_BOOTSTRAP === 'true';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const BOOTSTRAP_NONCE_PATTERN = /^[A-Za-z0-9_-]{32,256}$/;
+const TELEGRAM_TOKEN_PATTERN = /^\d{6,20}:[A-Za-z0-9_-]{20,100}$/;
+const TELEGRAM_BOOTSTRAP_PURPOSE = 'telegram-managed-kimi-bootstrap-v1';
 const ACTIONS = new Set(['DISPATCH_HERMES', 'WAIT', 'REQUEST_APPROVAL']);
 const MANAGED_CHANNELS = new Set(['KIMI', 'TELEGRAM', 'WEB']);
 const SENSITIVE_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|bot[_-]?token|token|secret|password|passwd|pwd|private[_-]?key|credential)/i;
@@ -36,6 +43,90 @@ function reject(code, exitCode = 2) {
 
 function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function sha256Text(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function secureEqual(left, right) {
+  const leftBuffer = Buffer.from(left, 'utf8');
+  const rightBuffer = Buffer.from(right, 'utf8');
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function assertPrivateFile(fileStat, code) {
+  if (!fileStat.isFile() || (fileStat.mode & 0o077) !== 0) throw new Error(code);
+}
+
+function resolveJsonPointer(document, pointer) {
+  if (typeof pointer !== 'string' || !pointer.startsWith('/')) throw new Error('telegram_secret_ref_invalid');
+  let value = document;
+  for (const rawPart of pointer.slice(1).split('/')) {
+    const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (['__proto__', 'prototype', 'constructor'].includes(part)) throw new Error('telegram_secret_ref_invalid');
+    if (!value || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, part)) {
+      throw new Error('telegram_secret_unavailable');
+    }
+    value = value[part];
+  }
+  return value;
+}
+
+async function bootstrapTelegramToken(nonce) {
+  if (!TELEGRAM_BOOTSTRAP_ENABLED) throw new Error('telegram_bootstrap_disabled');
+  if (!BOOTSTRAP_NONCE_PATTERN.test(nonce ?? '')) throw new Error('bootstrap_nonce_invalid');
+
+  const claimedGrantPath = `${TELEGRAM_BOOTSTRAP_GRANT_PATH}.consumed-${randomUUID()}`;
+  try {
+    await rename(TELEGRAM_BOOTSTRAP_GRANT_PATH, claimedGrantPath);
+  } catch {
+    throw new Error('bootstrap_grant_unavailable');
+  }
+
+  try {
+    const grantStat = await stat(claimedGrantPath);
+    assertPrivateFile(grantStat, 'bootstrap_grant_permissions_invalid');
+
+    const grant = JSON.parse(await readFile(claimedGrantPath, 'utf8'));
+    const expiresAt = Date.parse(grant.expiresAt ?? '');
+    if (grant.purpose !== TELEGRAM_BOOTSTRAP_PURPOSE
+      || typeof grant.nonceSha256 !== 'string'
+      || !secureEqual(grant.nonceSha256, sha256Text(nonce))
+      || !Number.isFinite(expiresAt)
+      || expiresAt <= Date.now()
+      || expiresAt > Date.now() + 15 * 60 * 1000) {
+      throw new Error('bootstrap_grant_invalid');
+    }
+
+    const openclawConfig = JSON.parse(await readFile(OPENCLAW_CONFIG_PATH, 'utf8'));
+    const tokenRef = openclawConfig?.channels?.telegram?.botToken;
+    if (!tokenRef || tokenRef.source !== 'file' || typeof tokenRef.provider !== 'string') {
+      throw new Error('telegram_secret_ref_invalid');
+    }
+    const provider = openclawConfig?.secrets?.providers?.[tokenRef.provider];
+    if (!provider || provider.source !== 'file' || typeof provider.path !== 'string') {
+      throw new Error('telegram_secret_provider_invalid');
+    }
+
+    const secretPath = await realpath(provider.path);
+    const secretStat = await stat(secretPath);
+    assertPrivateFile(secretStat, 'telegram_secret_permissions_invalid');
+    const secretDocument = JSON.parse(await readFile(secretPath, 'utf8'));
+    const token = resolveJsonPointer(secretDocument, tokenRef.id);
+    if (typeof token !== 'string' || !TELEGRAM_TOKEN_PATTERN.test(token)) {
+      throw new Error('telegram_secret_invalid');
+    }
+
+    // The atomic rename above claims the grant before any credential read.
+    // Remove the claimed grant before output so an ambiguous transport failure
+    // can never be replayed.
+    await unlink(claimedGrantPath);
+    process.stdout.write(token);
+  } catch (error) {
+    await unlink(claimedGrantPath).catch(() => undefined);
+    throw error;
+  }
 }
 
 function canonicalJson(value) {
@@ -1215,22 +1306,33 @@ async function receipt(pool, jobId) {
 }
 
 async function main() {
-  if (!DATABASE_URL) {
-    reject('gateway_not_configured', 1);
-    return;
-  }
   const rawCommand = (process.env.SSH_ORIGINAL_COMMAND ?? process.argv.slice(2).join(' ')).trim();
   const parts = rawCommand.split(/\s+/).filter(Boolean);
   const operation = parts[0];
   const argument = parts[1];
-  const allowed = ['health', 'pull', 'decide', 'receipt', 'intake', 'continuation', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'];
+  const allowed = ['health', 'pull', 'decide', 'receipt', 'intake', 'continuation', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover', 'telegram-bootstrap'];
   if (!operation || parts.length > 2 || !allowed.includes(operation)) {
     reject('command_not_allowed');
     return;
   }
-  const requiresArgument = ['decide', 'receipt', 'intake', 'continuation', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'].includes(operation);
+  const requiresArgument = ['decide', 'receipt', 'intake', 'continuation', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover', 'telegram-bootstrap'].includes(operation);
   if (requiresArgument !== Boolean(argument)) {
     reject('invalid_arguments');
+    return;
+  }
+
+  if (operation === 'telegram-bootstrap') {
+    try {
+      await bootstrapTelegramToken(argument);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'gateway_error';
+      reject(/^[a-z0-9_]+$/.test(code) ? code : 'gateway_error', 1);
+    }
+    return;
+  }
+
+  if (!DATABASE_URL) {
+    reject('gateway_not_configured', 1);
     return;
   }
 
