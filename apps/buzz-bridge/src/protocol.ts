@@ -53,6 +53,16 @@ export function formatBuzzMessage(input: {
   ].filter(Boolean).join('\n\n');
 }
 
+export function recipientPubkeys(
+  recipients: string[] = [],
+  pubkeys: Partial<Record<'codex' | 'claude', string>>
+): string[] {
+  return [...new Set(recipients.map((recipient) => {
+    if (recipient === 'codex' || recipient === 'claude') return pubkeys[recipient];
+    return undefined;
+  }).filter((pubkey): pubkey is string => Boolean(pubkey)))];
+}
+
 export function findEventWithMarker(
   value: unknown,
   marker: string,

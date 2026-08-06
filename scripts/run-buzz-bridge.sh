@@ -8,4 +8,9 @@ fi
 set -a
 . "$ENV_FILE"
 set +a
+TOKEN_FILE="${BRAD_AGENT_BRIDGE_TOKEN_FILE:-$HOME/.config/brad/agent-bridge.token}"
+if [ -z "${BRAD_AGENT_BRIDGE_TOKEN:-}" ] && [ -f "$TOKEN_FILE" ]; then
+  BRAD_AGENT_BRIDGE_TOKEN="$(cat "$TOKEN_FILE")"
+  export BRAD_AGENT_BRIDGE_TOKEN
+fi
 exec npm run start -w @brad/buzz-bridge

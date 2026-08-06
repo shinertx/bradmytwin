@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventField, findEventId, findEventWithMarker, formatBuzzMessage } from '../protocol.js';
+import { eventField, findEventId, findEventWithMarker, formatBuzzMessage, recipientPubkeys } from '../protocol.js';
 
 describe('Buzz bridge protocol', () => {
   it('formats a durable marker and exactly one requested agent mention', () => {
@@ -25,5 +25,12 @@ describe('Buzz bridge protocol', () => {
     ] };
     expect(findEventWithMarker(result, 'brad-outbox:abc', 'bridge')?.eventId).toBe('right');
     expect(findEventWithMarker(result, 'brad-outbox:abc', 'missing')).toBeUndefined();
+  });
+
+  it('addresses only registered specialist identities and removes duplicates', () => {
+    expect(recipientPubkeys(['codex', 'unknown', 'codex', 'claude'], {
+      codex: 'codex-pubkey',
+      claude: 'claude-pubkey'
+    })).toEqual(['codex-pubkey', 'claude-pubkey']);
   });
 });

@@ -11,6 +11,7 @@ import {
   findEventId,
   findEventWithMarker,
   formatBuzzMessage,
+  recipientPubkeys,
   type BuzzOutboxPayload
 } from './protocol.js';
 
@@ -22,7 +23,7 @@ const env = z.object({
   BRAD_AGENT_BRIDGE_TOKEN: z.string().min(24),
   BUZZ_CLI_BIN: z.string().default('buzz'),
   BUZZ_RELAY_URL: z.string().default('ws://127.0.0.1:3100'),
-  BUZZ_PRIVATE_KEY_FILE: z.string().default('~/.config/buzz/keys/owner.key'),
+  BUZZ_PRIVATE_KEY_FILE: z.string().default('~/.config/buzz/keys/brad-bridge.key'),
   BUZZ_CHANNEL_ID: z.string().uuid(),
   BUZZ_CODEX_PUBKEY: z.string().optional(),
   BUZZ_CLAUDE_PUBKEY: z.string().optional(),
@@ -75,7 +76,7 @@ async function buzz(args: string[]): Promise<unknown> {
 async function findPriorPublish(outboxId: string): Promise<string | undefined> {
   const marker = `brad-outbox:${outboxId}`;
   try {
-    const existing = await buzz(['messages', 'list', '--channel', env.BUZZ_CHANNEL_ID, '--limit', '100']);
+    const existing = await buzz(['messages', 'get', '--channel', env.BUZZ_CHANNEL_ID, '--limit', '100']);
     return findEventWithMarker(existing, marker, env.BUZZ_BRIDGE_PUBKEY)?.eventId;
   } catch {
     return undefined;
@@ -100,7 +101,14 @@ async function publishOutbox(): Promise<void> {
         });
         continue;
       }
-      const result = await buzz(['messages', 'send', '--channel', env.BUZZ_CHANNEL_ID, '--content', content]);
+      const mentions = recipientPubkeys(item.payload_json?.recipients, {
+        codex: env.BUZZ_CODEX_PUBKEY,
+        claude: env.BUZZ_CLAUDE_PUBKEY
+      });
+      const result = await buzz([
+        'messages', 'send', '--channel', env.BUZZ_CHANNEL_ID, '--content', content,
+        ...mentions.flatMap((pubkey) => ['--mention', pubkey])
+      ]);
       const eventId = findEventId(result);
       if (!eventId) throw new Error('buzz_send_missing_event_id');
       await api(`/internal/agent/buzz-outbox/${item.id}/receipt`, {
@@ -125,7 +133,7 @@ async function ingestReplies(): Promise<void> {
   for (const job of response.jobs) {
     const expectedPubkey = job.assigned_agent_id === 'codex' ? env.BUZZ_CODEX_PUBKEY : env.BUZZ_CLAUDE_PUBKEY;
     if (!expectedPubkey) continue;
-    const result = await buzz(['messages', 'thread', '--channel', env.BUZZ_CHANNEL_ID, '--event', job.buzz_event_id, '--limit', '50']);
+    const result = await buzz(['messages', 'thread', '--channel', env.BUZZ_CHANNEL_ID, '--event', job.buzz_event_id]);
     for (const event of eventList(result)) {
       const eventId = eventField(event, ['id', 'event_id', 'eventId']);
       const author = eventField(event, ['pubkey', 'author_pubkey', 'authorPubkey']);
