@@ -11,6 +11,7 @@ import {
   findEventId,
   findEventWithMarker,
   formatBuzzMessage,
+  notificationRecipients,
   recipientPubkeys,
   type BuzzOutboxPayload
 } from './protocol.js';
@@ -101,7 +102,7 @@ async function publishOutbox(): Promise<void> {
         });
         continue;
       }
-      const mentions = recipientPubkeys(item.payload_json?.recipients, {
+      const mentions = recipientPubkeys(notificationRecipients(item.payload_json ?? {}), {
         codex: env.BUZZ_CODEX_PUBKEY,
         claude: env.BUZZ_CLAUDE_PUBKEY
       });

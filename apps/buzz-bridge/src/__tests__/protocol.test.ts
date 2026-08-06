@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventField, findEventId, findEventWithMarker, formatBuzzMessage, recipientPubkeys } from '../protocol.js';
+import { eventField, findEventId, findEventWithMarker, formatBuzzMessage, notificationRecipients, recipientPubkeys } from '../protocol.js';
 
 describe('Buzz bridge protocol', () => {
   it('formats a durable marker and exactly one requested agent mention', () => {
@@ -32,5 +32,16 @@ describe('Buzz bridge protocol', () => {
       codex: 'codex-pubkey',
       claude: 'claude-pubkey'
     })).toEqual(['codex-pubkey', 'claude-pubkey']);
+  });
+
+  it('notifies specialists only for explicit delegation events', () => {
+    expect(notificationRecipients({ type: 'RESULT', recipients: ['codex'] })).toEqual([]);
+    expect(notificationRecipients({ type: 'CRITIQUE', recipients: ['hermes'] })).toEqual([]);
+    expect(notificationRecipients({ type: 'DELEGATE', recipients: ['codex'] })).toEqual(['codex']);
+    expect(formatBuzzMessage({
+      outboxId: 'outbox-2',
+      payload: { sender: 'hermes', type: 'RESULT', recipients: ['codex'], body: 'Visible transcript.' },
+      mentions: { codex: '@Codex' }
+    })).not.toContain('@Codex');
   });
 });

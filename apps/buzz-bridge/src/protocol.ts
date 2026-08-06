@@ -7,6 +7,10 @@ export interface BuzzOutboxPayload {
   body?: string;
 }
 
+export function notificationRecipients(payload: BuzzOutboxPayload): string[] {
+  return payload.type === 'DELEGATE' ? payload.recipients ?? [] : [];
+}
+
 export function findEventId(value: unknown): string | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const row = value as Record<string, unknown>;
@@ -41,7 +45,7 @@ export function formatBuzzMessage(input: {
   payload: BuzzOutboxPayload;
   mentions: Partial<Record<'codex' | 'claude', string>>;
 }): string {
-  const recipientMentions = (input.payload.recipients ?? []).map((recipient) => {
+  const recipientMentions = notificationRecipients(input.payload).map((recipient) => {
     if (recipient === 'codex' || recipient === 'claude') return input.mentions[recipient] ?? '';
     return '';
   }).filter(Boolean).join(' ');
