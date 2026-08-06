@@ -90,6 +90,22 @@ function promptDigest(value) {
   return prompt ? createHash('sha256').update(prompt, 'utf8').digest('hex') : '';
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const entries = Object.entries(value)
+    .filter(([, child]) => child !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`).join(',')}}`;
+}
+
+function responseDigest(value) {
+  const text = normalizedString(value);
+  return text
+    ? createHash('sha256').update(canonicalJson({ text, artifactRefs: [], evidenceRefs: [] })).digest('hex')
+    : '';
+}
+
 function safeClaimFailureCode(error) {
   const message = error instanceof Error ? normalizedString(error.message) : '';
   return /^(?:managed_kimi|brad_gateway)_[a-z0-9_]+$/.test(message)
@@ -407,14 +423,23 @@ export function createManagedKimiPlugin(options = {}) {
           return { runId: exactRunId, state: runStates.get(exactRunId) };
         }
         const sessionKey = boundedContextValue([event?.sessionKey, ctx?.sessionKey], 512);
-        if (!sessionKey) return null;
-        const states = [...new Set(
-          [...runStates.values()].filter((state) => (
-            state.sessionKey === sessionKey || state.sessionKeys?.has(sessionKey)
-          ))
-        )];
-        if (states.length !== 1) return null;
-        const state = states[0];
+        const states = [...new Set([...runStates.values()].filter((state) => (
+          !sessionKey
+          || state.sessionKey === sessionKey
+          || state.sessionKeys?.has(sessionKey)
+        )))];
+        if (states.length === 1) {
+          const state = states[0];
+          return { runId: state.activeRunId, state };
+        }
+        const outboundDigest = responseDigest(event?.content);
+        if (!outboundDigest) return null;
+        const digestMatches = states.filter((state) => (
+          ['settled', 'delivered'].includes(state.status)
+          && state.responseDigest === outboundDigest
+        ));
+        if (digestMatches.length !== 1) return null;
+        const state = digestMatches[0];
         return { runId: state.activeRunId, state };
       };
 

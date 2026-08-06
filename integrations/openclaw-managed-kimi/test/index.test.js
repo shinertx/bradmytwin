@@ -94,6 +94,12 @@ function gatewayOk(operation) {
     : { ok: true };
 }
 
+function settledResponseDigest(text) {
+  return createHash('sha256')
+    .update(JSON.stringify({ artifactRefs: [], evidenceRefs: [], text }))
+    .digest('hex');
+}
+
 async function claimNormal(api, runId, prompt = `objective ${runId}`, inboundOverrides = {}, ctxOverrides = {}) {
   const ctx = kimiContext(runId, { ...inboundOverrides, ...ctxOverrides });
   await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
@@ -982,6 +988,48 @@ test('outbound delivery uses the managed session when OpenClaw omits agent and r
     )).cancel,
     true
   );
+});
+
+test('outbound delivery matches the exact response when a persistent session has multiple settled runs', async () => {
+  const calls = [];
+  const gateway = async (operation, payload) => {
+    calls.push({ operation, payload });
+    if (operation === 'intake') return claim(payload.externalMessageId);
+    if (operation === 'thread-reply') {
+      return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+    }
+    return gatewayOk(operation);
+  };
+  const api = fakeApi();
+  createManagedKimiPlugin({ gateway }).register(api);
+  const sharedSession = 'agent:brad-runtime:main';
+
+  const first = await claimNormal(api, 'persistent-first', 'first objective', {}, { sessionKey: sharedSession });
+  const second = await claimNormal(api, 'persistent-second', 'second objective', {}, { sessionKey: sharedSession });
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'first exact response' },
+    first.ctx
+  );
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'second exact response' },
+    second.ctx
+  );
+
+  await api.handlers.get('message_sent')(
+    {
+      content: 'second exact response',
+      success: true,
+      messageId: 'provider-second-response',
+      sessionKey: sharedSession
+    },
+    { sessionKey: sharedSession }
+  );
+
+  const delivery = calls.filter((call) => call.operation === 'thread-delivery');
+  assert.equal(delivery.length, 1);
+  assert.equal(delivery[0].payload.inboundId, 'inbound-persistent-second');
+  assert.equal(delivery[0].payload.jobId, 'job-persistent-second');
+  assert.equal(delivery[0].payload.messageId, 'provider-second-response');
 });
 
 test('the two-minute recovery scan schedules the original session and transfers its exact claim', async () => {
