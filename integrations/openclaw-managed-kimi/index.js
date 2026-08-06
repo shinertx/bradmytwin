@@ -387,6 +387,24 @@ export function createManagedKimiPlugin(options = {}) {
         state.deliveryReceiptTimer = null;
       };
 
+      const armDeliveryReceiptTimer = (state) => {
+        if (state.status !== 'settled' || state.deliveryReceiptTimer || !state.responseDigest) return;
+        state.deliveryReceiptTimer = scheduleTimeout(() => {
+          state.deliveryReceiptTimer = null;
+          if (state.status !== 'settled' || !state.responseDigest) return;
+          void callGateway('thread-delivery', {
+            inboundId: state.claim.inboundId,
+            jobId: state.claim.jobId,
+            responseDigest: state.responseDigest,
+            success: false,
+            messageId: null
+          }).catch(() => undefined).finally(() => {
+            if (state.status === 'settled') state.status = 'delivery_reconcile_required';
+          });
+        }, DELIVERY_RECEIPT_TIMEOUT_MS);
+        state.deliveryReceiptTimer?.unref?.();
+      };
+
       const deleteRunState = (runId, expectedState) => {
         const state = runStates.get(runId);
         if (!state || (expectedState && state !== expectedState)) return;
@@ -769,6 +787,7 @@ export function createManagedKimiPlugin(options = {}) {
           state.responseDigest = claimField(result, 'responseDigest', 64);
           state.status = 'settled';
           state.settledAt = now();
+          armDeliveryReceiptTimer(state);
         } catch {
           state.status = 'settlement_failed';
           state.invalidatedAt = now();
@@ -915,23 +934,7 @@ export function createManagedKimiPlugin(options = {}) {
         const matched = findOutboundState(event, ctx);
         if (!matched && !isManagedOutboundSession(event, ctx)) return;
         if (matched?.state?.status === 'settled') {
-          const { state } = matched;
-          if (!state.deliveryReceiptTimer) {
-            state.deliveryReceiptTimer = scheduleTimeout(() => {
-              state.deliveryReceiptTimer = null;
-              if (state.status !== 'settled' || !state.responseDigest) return;
-              void callGateway('thread-delivery', {
-                inboundId: state.claim.inboundId,
-                jobId: state.claim.jobId,
-                responseDigest: state.responseDigest,
-                success: false,
-                messageId: null
-              }).catch(() => undefined).finally(() => {
-                if (state.status === 'settled') state.status = 'delivery_reconcile_required';
-              });
-            }, DELIVERY_RECEIPT_TIMEOUT_MS);
-            state.deliveryReceiptTimer?.unref?.();
-          }
+          armDeliveryReceiptTimer(matched.state);
           return;
         }
         if (matched?.state?.status === 'delivered') return;

@@ -1060,10 +1060,6 @@ test('missing connector receipts become reconcile-required instead of remaining 
     { lastAssistantMessage: 'provider-visible but not acknowledged' },
     ctx
   );
-  assert.equal(
-    await api.handlers.get('reply_payload_sending')({ kind: 'final', runId: 'missing-receipt' }, ctx),
-    undefined
-  );
   assert.ok(receiptTimeout);
 
   receiptTimeout.callback();
