@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -10,6 +10,7 @@ const MAX_RUN_ID_LENGTH = 243;
 const CLAIM_RENEW_INTERVAL_MS = 60 * 1000;
 const RECOVERY_SCAN_INTERVAL_MS = 2 * 60 * 1000;
 const MAX_RECOVERIES_PER_SCAN = 20;
+const MANAGED_CONTINUATION_MAX_AGE_MS = 30 * 1000;
 const RECOVERY_PACKET_PREFIX = 'BRAD_RECOVERY_PACKET_V1:';
 const CONFIG_KEYS = new Set([
   'managedAgentId',
@@ -81,6 +82,11 @@ function commandAllowed(params) {
 
 function normalizedString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function promptDigest(value) {
+  const prompt = normalizedString(value);
+  return prompt ? createHash('sha256').update(prompt, 'utf8').digest('hex') : '';
 }
 
 function safeClaimFailureCode(error) {
@@ -317,6 +323,11 @@ export function createManagedKimiPlugin(options = {}) {
       let recoveryTimer = null;
       let recoveryScanActive = false;
       let ownerContextShapeLogged = false;
+      let continuationDiagnosticLogged = false;
+      const ownerSeparator = config.managedOwnerIdentity.indexOf(':');
+      const configuredOwnerPrincipal = config.managedOwnerIdentity.slice(ownerSeparator + 1);
+      const managedBootSessionKey = `agent:${config.managedAgentId}:boot`;
+      const managedMainSessionKey = `agent:${config.managedAgentId}:${configuredOwnerPrincipal}`;
 
       const stopHeartbeat = (state) => {
         if (!state?.heartbeat) return;
@@ -328,8 +339,11 @@ export function createManagedKimiPlugin(options = {}) {
         const state = runStates.get(runId);
         if (!state || (expectedState && state !== expectedState)) return;
         stopHeartbeat(state);
-        runStates.delete(runId);
-        inboundStates.delete(runId);
+        for (const [candidateRunId, candidateState] of runStates) {
+          if (candidateState !== state) continue;
+          runStates.delete(candidateRunId);
+          inboundStates.delete(candidateRunId);
+        }
       };
 
       const invalidateRunState = (runId, state, reason) => {
@@ -370,8 +384,14 @@ export function createManagedKimiPlugin(options = {}) {
         }
         const sessionKey = boundedContextValue([event?.sessionKey, ctx?.sessionKey], 512);
         if (!sessionKey) return null;
-        const matches = [...runStates.entries()].filter(([, state]) => state.sessionKey === sessionKey);
-        return matches.length === 1 ? { runId: matches[0][0], state: matches[0][1] } : null;
+        const states = [...new Set(
+          [...runStates.values()].filter((state) => (
+            state.sessionKey === sessionKey || state.sessionKeys?.has(sessionKey)
+          ))
+        )];
+        if (states.length !== 1) return null;
+        const state = states[0];
+        return { runId: state.activeRunId, state };
       };
 
       const isManagedOutboundSession = (event, ctx) => {
@@ -384,6 +404,11 @@ export function createManagedKimiPlugin(options = {}) {
           status: 'claimed',
           claim,
           sessionKey: claim.sessionKey,
+          sessionKeys: new Set([claim.sessionKey]),
+          originSessionKey: claim.sessionKey,
+          promptDigest: claim.promptDigest,
+          originRunId: runId,
+          activeRunId: runId,
           createdAt: now(),
           heartbeat: null
         };
@@ -411,9 +436,8 @@ export function createManagedKimiPlugin(options = {}) {
           && explicitProviders.length === 0
           && event?.senderIsOwner === true;
         if (detectedChannel !== 'KIMI' && !authenticatedOwnerWithoutIdentity) return null;
-        const ownerSeparator = config.managedOwnerIdentity.indexOf(':');
         const configuredProvider = config.managedOwnerIdentity.slice(0, ownerSeparator);
-        const configuredPrincipal = config.managedOwnerIdentity.slice(ownerSeparator + 1);
+        const configuredPrincipal = configuredOwnerPrincipal;
         const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
         const conversationId = boundedContextValue(
           [ctx?.chatId, ctx?.channelId, event?.channelId, sessionKey],
@@ -495,7 +519,12 @@ export function createManagedKimiPlugin(options = {}) {
           timestamp: now(),
           text
         });
-        return Object.freeze({ ...validateClaim(result), claimOwner, sessionKey: inbound.sessionKey });
+        return Object.freeze({
+          ...validateClaim(result),
+          claimOwner,
+          sessionKey: inbound.sessionKey,
+          promptDigest: promptDigest(text)
+        });
       };
 
       const claimRecoveryRun = async (event, ctx, runId, packet) => {
@@ -526,8 +555,41 @@ export function createManagedKimiPlugin(options = {}) {
           threadId: assignment.threadId,
           objectiveId: assignment.objectiveId,
           claimOwner,
-          sessionKey: assignment.sessionKey
+          sessionKey: assignment.sessionKey,
+          promptDigest: promptDigest(event?.prompt)
         });
+      };
+
+      const joinManagedContinuation = (event, ctx, runId) => {
+        const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
+        if (sessionKey !== managedMainSessionKey) return null;
+        if (event?.senderIsOwner !== false) return null;
+        if (normalizedString(event?.accountId).toLowerCase() !== configuredOwnerPrincipal) return null;
+        if (normalizedString(event?.senderId) || normalizedString(ctx?.senderId)) return null;
+        const digest = promptDigest(event?.prompt);
+        if (!digest) return null;
+        const cutoff = now() - MANAGED_CONTINUATION_MAX_AGE_MS;
+        const baseCandidates = [...new Set(runStates.values())].filter((state) => (
+          state.status === 'claimed'
+          && state.originSessionKey === managedBootSessionKey
+          && state.activeRunId === state.originRunId
+          && state.createdAt >= cutoff
+        ));
+        const candidates = baseCandidates.filter((state) => state.promptDigest === digest);
+        if (candidates.length !== 1 && !continuationDiagnosticLogged) {
+          api.logger?.warn?.(
+            `Brad managed continuation not joined: candidate_count=${baseCandidates.length} prompt_match=${baseCandidates.some((state) => state.promptDigest === digest)}`
+          );
+          continuationDiagnosticLogged = true;
+        }
+        if (candidates.length !== 1) return null;
+        const state = candidates[0];
+        state.activeRunId = runId;
+        state.sessionKey = sessionKey;
+        state.sessionKeys.add(sessionKey);
+        state.continuationJoinedAt = now();
+        runStates.set(runId, state);
+        return state;
       };
 
       const claimRun = async (event, ctx) => {
@@ -538,6 +600,9 @@ export function createManagedKimiPlugin(options = {}) {
         if (existing?.status === 'claiming') return existing.promise;
         if (existing) throw new Error('managed_kimi_run_not_claimable');
 
+        const continuation = joinManagedContinuation(event, ctx, runId);
+        if (continuation) return continuation;
+
         const packet = parseRecoveryPacket(event?.prompt);
         const sessionKey = packet
           ? recoveryClaims.get(packet.inboundId)?.assignment.sessionKey
@@ -547,7 +612,18 @@ export function createManagedKimiPlugin(options = {}) {
             ? claimRecoveryRun(event, ctx, runId, packet)
             : claimNormalRun(event, ctx, runId))
           .then((claim) => activateClaim(runId, claim));
-        const claimingState = { status: 'claiming', promise, sessionKey, createdAt: now(), heartbeat: null };
+        const claimingState = {
+          status: 'claiming',
+          promise,
+          sessionKey,
+          sessionKeys: new Set([sessionKey]),
+          originSessionKey: sessionKey,
+          promptDigest: promptDigest(event?.prompt),
+          originRunId: runId,
+          activeRunId: runId,
+          createdAt: now(),
+          heartbeat: null
+        };
         runStates.set(runId, claimingState);
 
         try {
@@ -568,6 +644,7 @@ export function createManagedKimiPlugin(options = {}) {
         const state = runStates.get(runId);
         if (!state || state.status === 'settled' || state.status === 'settling') return;
         if (state.status !== 'claimed') return;
+        if (state.activeRunId !== runId) return;
         const text = assistantText(event);
         if (!text) {
           invalidateRunState(runId, state, 'settlement_failed');
@@ -734,7 +811,7 @@ export function createManagedKimiPlugin(options = {}) {
         if (normalizedString(event?.kind).toLowerCase() !== 'final') return;
         const matched = findOutboundState(event, ctx);
         if (!matched && !isManagedOutboundSession(event, ctx)) return;
-        if (matched?.state?.status === 'settled') return;
+        if (['settled', 'delivered'].includes(matched?.state?.status)) return;
         return {
           cancel: true,
           reason: 'Brad blocked an answer that was not durably settled in the control plane.'
@@ -748,7 +825,8 @@ export function createManagedKimiPlugin(options = {}) {
         if (!runId) return;
         const state = runStates.get(runId);
         if (!state) return;
-        if (!event?.success && !['settled', 'delivery_reconcile_required'].includes(state.status)) {
+        if (state.activeRunId !== runId) return;
+        if (!event?.success && !['settled', 'delivered', 'delivery_reconcile_required'].includes(state.status)) {
           invalidateRunState(runId, state, 'run_failed');
         }
       }, { priority: 90 });
@@ -757,6 +835,7 @@ export function createManagedKimiPlugin(options = {}) {
         const matched = findOutboundState(event, ctx);
         if (!matched) return;
         const { runId, state } = matched;
+        if (state.status === 'delivered') return;
         if (state.status !== 'settled' || !state.responseDigest) return;
         try {
           await callGateway('thread-delivery', {
@@ -767,7 +846,8 @@ export function createManagedKimiPlugin(options = {}) {
             messageId: boundedContextValue([event?.messageId], 512) || null
           });
           if (event?.success === true) {
-            deleteRunState(runId, state);
+            state.status = 'delivered';
+            state.deliveredAt = now();
             return;
           }
         } catch {

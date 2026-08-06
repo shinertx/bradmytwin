@@ -403,6 +403,138 @@ test('managed Kimi accepts the official owner verdict when the connector redacts
   assert.equal(calls[0].payload.channel, 'KIMI');
 });
 
+test('managed Kimi main continuation joins the exact authenticated boot claim once', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    },
+    now: () => 1_000
+  }).register(api);
+  const prompt = 'one durable managed Kimi objective';
+  const bootCtx = kimiContext('boot-run', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    chatId: undefined,
+    senderId: undefined,
+    accountId: undefined,
+    sessionKey: `agent:${CONFIG.managedAgentId}:boot`
+  });
+  const bootEvent = runEvent(prompt, {
+    channelId: undefined,
+    senderId: undefined,
+    accountId: undefined,
+    senderIsOwner: true
+  });
+  assert.equal(await api.handlers.get('before_agent_run')(bootEvent, bootCtx), undefined);
+
+  const mainCtx = kimiContext('main-run', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    chatId: undefined,
+    senderId: undefined,
+    accountId: undefined,
+    sessionKey: `agent:${CONFIG.managedAgentId}:main`
+  });
+  const mainEvent = runEvent(prompt, {
+    channelId: undefined,
+    senderId: undefined,
+    accountId: 'main',
+    senderIsOwner: false
+  });
+  assert.equal(await api.handlers.get('before_agent_run')(mainEvent, mainCtx), undefined);
+  assert.equal(calls.filter((call) => call.operation === 'intake').length, 1);
+
+  await api.handlers.get('agent_end')({ success: false }, bootCtx);
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: { role: 'assistant', content: 'joined response' } },
+    bootCtx
+  );
+  assert.equal(calls.filter((call) => call.operation === 'thread-reply').length, 0);
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: { role: 'assistant', content: 'joined response' } },
+    mainCtx
+  );
+  assert.equal(calls.filter((call) => call.operation === 'thread-reply').length, 1);
+
+  await api.handlers.get('message_sent')(
+    { runId: 'main-run', success: true, messageId: 'managed-kimi-response' },
+    mainCtx
+  );
+  await api.handlers.get('message_sent')(
+    { runId: 'boot-run', success: true, messageId: 'outer-wrapper-response' },
+    bootCtx
+  );
+  assert.equal(calls.filter((call) => call.operation === 'thread-delivery').length, 1);
+  assert.equal(
+    await api.handlers.get('reply_payload_sending')({ kind: 'final', runId: 'boot-run' }, bootCtx),
+    undefined
+  );
+  assert.equal(
+    await api.handlers.get('reply_payload_sending')(
+      { kind: 'final', sessionKey: bootCtx.sessionKey },
+      { sessionKey: bootCtx.sessionKey }
+    ),
+    undefined
+  );
+});
+
+test('managed Kimi continuation rejects prompt, account, and time-window mismatches', async () => {
+  let currentTime = 1_000;
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    },
+    now: () => currentTime
+  }).register(api);
+  const bootCtx = kimiContext('strict-boot', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    chatId: undefined,
+    senderId: undefined,
+    sessionKey: `agent:${CONFIG.managedAgentId}:boot`
+  });
+  await api.handlers.get('before_agent_run')(
+    runEvent('exact objective', {
+      channelId: undefined,
+      senderId: undefined,
+      accountId: undefined,
+      senderIsOwner: true
+    }),
+    bootCtx
+  );
+
+  const continuation = (runId, prompt, accountId) => api.handlers.get('before_agent_run')(
+    runEvent(prompt, {
+      channelId: undefined,
+      senderId: undefined,
+      accountId,
+      senderIsOwner: false
+    }),
+    kimiContext(runId, {
+      messageProvider: undefined,
+      channel: undefined,
+      channelId: undefined,
+      chatId: undefined,
+      senderId: undefined,
+      sessionKey: `agent:${CONFIG.managedAgentId}:main`
+    })
+  );
+  assert.equal((await continuation('wrong-prompt', 'different objective', 'main')).outcome, 'block');
+  assert.equal((await continuation('wrong-account', 'exact objective', 'other')).outcome, 'block');
+  currentTime = 31_001;
+  assert.equal((await continuation('stale', 'exact objective', 'main')).outcome, 'block');
+  assert.equal(calls.filter((call) => call.operation === 'intake').length, 1);
+});
+
 test('redacted identity fields without the official owner verdict fail closed', async () => {
   const calls = [];
   const api = fakeApi();
