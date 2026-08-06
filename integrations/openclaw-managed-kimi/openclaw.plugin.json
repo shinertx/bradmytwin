@@ -1,0 +1,12 @@
+{
+  "id": "brad-managed-kimi",
+  "name": "Brad Managed Kimi Bridge",
+  "description": "Mirrors managed Kimi messages and replies into Brad's durable control plane.",
+  "version": "1.0.0",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

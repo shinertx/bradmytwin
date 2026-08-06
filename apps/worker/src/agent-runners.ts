@@ -154,6 +154,18 @@ export class DeferredBuzzAgentRunner implements AgentRunner {
   }
 }
 
+export class DeferredManagedKimiRunner implements AgentRunner {
+  async run(): Promise<AgentRunResult> {
+    return {
+      text: 'Managed Kimi assignment is waiting for the signed Kimi bridge reply.',
+      artifactRefs: [],
+      evidenceRefs: [],
+      deferred: true,
+      blockerCode: 'WAITING_MANAGED_KIMI_REPLY'
+    };
+  }
+}
+
 export class DeterministicVerifierRunner implements AgentRunner {
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const contract = request.verificationContract ?? {};
@@ -201,10 +213,16 @@ export class DeterministicVerifierRunner implements AgentRunner {
 
 export function builtInRunnerRegistry(input: {
   openclaw: ConstructorParameters<typeof OpenClawAgentRunner>[0];
+  executiveMode?: 'openclaw' | 'managed-kimi';
   hermes?: { runner: ProcessHermesRunner; artifactRoot: string };
 }): AgentRunnerRegistry {
   const registry: AgentRunnerRegistry = new Map();
-  registry.set(AGENT_IDS.BRAD_KIMI, new OpenClawAgentRunner(input.openclaw));
+  registry.set(
+    AGENT_IDS.BRAD_KIMI,
+    input.executiveMode === 'managed-kimi'
+      ? new DeferredManagedKimiRunner()
+      : new OpenClawAgentRunner(input.openclaw)
+  );
   if (input.hermes) registry.set(AGENT_IDS.HERMES, new HermesAgentRunner(input.hermes.runner, input.hermes.artifactRoot));
   registry.set(AGENT_IDS.CODEX, new DeferredBuzzAgentRunner('codex'));
   registry.set(AGENT_IDS.CLAUDE, new DeferredBuzzAgentRunner('claude'));

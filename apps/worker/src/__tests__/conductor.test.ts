@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { DeterministicVerifierRunner, type AgentRunRequest, type AgentRunResult, type AgentRunner, type AgentRunnerRegistry } from '../agent-runners.js';
+import { DeferredManagedKimiRunner, DeterministicVerifierRunner, type AgentRunRequest, type AgentRunResult, type AgentRunner, type AgentRunnerRegistry } from '../agent-runners.js';
 import { processOneAgentJob, reconcileExpiredAgentLeases } from '../conductor.js';
 import { digestPayload, sha256 } from '../digest.js';
 import {
@@ -54,7 +54,13 @@ async function database(): Promise<Pool | null> {
   }
   if (!(await canConnect())) return null;
   const pool = new Pool({ connectionString: DATABASE_URL, max: 4 });
-  for (const migration of ['005_brad_ownership_kernel.sql', '006_kernel_slice_1.sql', '010_agent_conductor.sql']) {
+  for (const migration of [
+    '005_brad_ownership_kernel.sql',
+    '006_kernel_slice_1.sql',
+    '009_kimi_hermes_control.sql',
+    '010_agent_conductor.sql',
+    '011_managed_kimi_bridge.sql'
+  ]) {
     await pool.query(await readFile(path.join(REPO_ROOT, 'infra/postgres/init', migration), 'utf8'));
   }
   return pool;
@@ -117,6 +123,36 @@ async function seed(pool: Pool, input: { turns?: number; depth?: 'LIGHT' | 'FULL
     [jobId, PERSON_ID, threadId, ownerMessageId, JSON.stringify(request), digestPayload(request)]
   );
   return { threadId, objectiveId, jobId };
+}
+
+function encodeGatewayPayload(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+async function runGateway(command: string): Promise<Record<string, unknown>> {
+  const result = await execFileAsync(process.execPath, [path.join(REPO_ROOT, 'tools/kimi-brad-gateway.mjs')], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, DATABASE_URL, SSH_ORIGINAL_COMMAND: command },
+    timeout: 10_000
+  });
+  return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+}
+
+async function seedManagedKimiBinding(pool: Pool): Promise<void> {
+  const objectiveId = randomUUID();
+  await pool.query(`INSERT INTO persons (id, preferred_name, onboarding_state) VALUES ($1,'Managed Kimi Test','ACTIVE')`, [PERSON_ID]);
+  await pool.query(
+    `INSERT INTO brad_objectives (
+       id, person_id, goal, definition_of_done, verification_method, authority_level,
+       status, current_step, next_action, idempotency_key
+     ) VALUES ($1,$2,'managed Kimi bridge','bridge canaries pass','database receipts',
+       'READ_ONLY','RUNNING','bridge_setup','run_canary','managed-kimi-binding')`,
+    [objectiveId, PERSON_ID]
+  );
+  await pool.query(
+    `INSERT INTO brad_kimi_assignments (person_id, objective_id) VALUES ($1,$2)`,
+    [PERSON_ID, objectiveId]
+  );
 }
 
 describe('Brad multi-agent conductor', () => {
@@ -191,6 +227,60 @@ describe('Brad multi-agent conductor', () => {
     expect(runner.calls).toHaveLength(0);
     const thread = await pool.query(`SELECT status, blocker_code FROM brad_agent_threads WHERE id = $1`, [ids.threadId]);
     expect(thread.rows[0]).toMatchObject({ status: 'BLOCKED', blocker_code: 'LOOP_BUDGET_EXHAUSTED' });
+  });
+
+  it('defers the executive turn to managed Kimi and does not reclaim a waiting reply', async () => {
+    if (!pool) return;
+    const ids = await seed(pool);
+    const registry: AgentRunnerRegistry = new Map([[AGENT_IDS.BRAD_KIMI, new DeferredManagedKimiRunner()]]);
+    expect(await processOneAgentJob(pool, registry, config)).toBe(true);
+    expect((await pool.query(`SELECT status, last_error FROM brad_agent_jobs WHERE id = $1`, [ids.jobId])).rows[0])
+      .toMatchObject({ status: 'WAITING', last_error: 'WAITING_MANAGED_KIMI_REPLY' });
+    expect(await processOneAgentJob(pool, registry, config)).toBe(false);
+  });
+
+  it('bridges managed Kimi intake and reply exactly once with redaction and Hermes delegation', async () => {
+    if (!pool) return;
+    await seedManagedKimiBinding(pool);
+    const inbound = {
+      channel: 'KIMI',
+      externalMessageId: 'managed-kimi-canary-1',
+      conversationId: 'managed-kimi-test',
+      senderId: 'owner',
+      text: 'Investigate the recovery canary. password=do-not-leak'
+    };
+    const first = await runGateway(`intake ${encodeGatewayPayload(inbound)}`);
+    const duplicate = await runGateway(`intake ${encodeGatewayPayload(inbound)}`);
+    expect(first).toMatchObject({ ok: true, operation: 'intake', deduplicated: false });
+    expect(duplicate).toMatchObject({
+      ok: true,
+      operation: 'intake',
+      deduplicated: true,
+      objectiveId: first.objectiveId,
+      threadId: first.threadId,
+      jobId: first.jobId
+    });
+
+    const pull = await runGateway('thread-pull');
+    expect(JSON.stringify(pull)).not.toContain('do-not-leak');
+    expect(JSON.stringify(pull)).toContain('[REDACTED]');
+
+    const reply = {
+      jobId: first.jobId,
+      threadId: first.threadId,
+      objectiveId: first.objectiveId,
+      sessionId: 'managed-kimi-session',
+      text: 'Delegate a read-only recovery inspection to Hermes and require source-of-record evidence.'
+    };
+    const firstReply = await runGateway(`thread-reply ${encodeGatewayPayload(reply)}`);
+    const duplicateReply = await runGateway(`thread-reply ${encodeGatewayPayload(reply)}`);
+    expect(firstReply).toMatchObject({ ok: true, deduplicated: false, nextAgentId: 'hermes' });
+    expect(duplicateReply).toMatchObject({ ok: true, deduplicated: true });
+
+    expect((await pool.query(`SELECT count(*)::int AS count FROM brad_managed_kimi_inbound`)).rows[0].count).toBe(1);
+    expect((await pool.query(
+      `SELECT count(*)::int AS count FROM brad_agent_jobs WHERE assigned_agent_id = 'hermes' AND status = 'QUEUED'`
+    )).rows[0].count).toBe(1);
   });
 
   it('enforces the JENNI boundary before any agent adapter is invoked', async () => {

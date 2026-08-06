@@ -194,7 +194,7 @@ export async function claimAgentJob(pool: Pool, config: ConductorWorkerConfig): 
               j.request_json, j.request_digest, j.attempt_count
        FROM brad_agent_jobs j
        JOIN brad_agent_threads t ON t.id = j.thread_id AND t.person_id = j.person_id
-       WHERE j.status IN ('QUEUED','WAITING') AND j.next_attempt_at <= now()
+       WHERE j.status = 'QUEUED' AND j.next_attempt_at <= now()
          AND t.status NOT IN ('PAUSED','CANCELLED','SUCCEEDED','FAILED')
        ORDER BY j.created_at
        FOR UPDATE OF j SKIP LOCKED LIMIT 1`

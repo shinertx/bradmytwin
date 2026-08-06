@@ -52,6 +52,7 @@ const env = z
     OPENCLAW_CLI_AGENT_ID: z.string().optional(),
     OPENCLAW_CLI_TIMEOUT_MS: z.coerce.number().default(90000),
     BRAD_CONDUCTOR_MODE: z.enum(['off', 'shadow', 'active']).default('shadow'),
+    BRAD_EXECUTIVE_RUNNER_MODE: z.enum(['openclaw', 'managed-kimi']).default('openclaw'),
     BRAD_AGENT_WORKER_IDENTITY: z.string().default('brad-worker'),
     BRAD_AGENT_LEASE_SECONDS: z.coerce.number().int().positive().default(300),
     BRAD_AGENT_WORKFLOW_VERSION: z.string().default('brad-conductor-v1'),
@@ -103,6 +104,7 @@ const hermesRunner = env.HERMES_RUNNER_PATH
     })
   : undefined;
 const agentRunners = builtInRunnerRegistry({
+  executiveMode: env.BRAD_EXECUTIVE_RUNNER_MODE,
   openclaw: {
     baseUrl: env.OPENCLAW_URL,
     apiKey: env.OPENCLAW_API_KEY,
