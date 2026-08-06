@@ -83,7 +83,7 @@ function telegramContext(runId, overrides = {}) {
     agentId: CONFIG.managedAgentId,
     messageProvider: 'telegram',
     channel: 'telegram',
-    channelId: 'telegram',
+    channelId: TEST_TELEGRAM_ID,
     channelContext: {
       sender: { id: TEST_TELEGRAM_ID },
       chat: { id: TEST_TELEGRAM_ID }
@@ -100,7 +100,7 @@ function telegramRunEvent(prompt, overrides = {}) {
   return {
     prompt,
     messages: [],
-    channelId: 'telegram',
+    channelId: TEST_TELEGRAM_ID,
     senderId: TEST_TELEGRAM_ID,
     senderIsOwner: true,
     accountId: TEST_TELEGRAM_ACCOUNT,
@@ -846,6 +846,28 @@ test('paired Telegram owner can use the exact run fallback when managed inbound 
   });
 });
 
+test('paired Telegram owner remains compatible with legacy provider-style channel ids', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+
+  const result = await api.handlers.get('before_agent_run')(
+    telegramRunEvent('legacy Telegram owner objective', { channelId: 'telegram' }),
+    telegramContext('legacy-telegram-channel-id', { channelId: 'telegram' })
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(calls[0].operation, 'intake');
+  assert.equal(calls[0].payload.channel, 'TELEGRAM');
+  assert.equal(calls[0].payload.senderId, TEST_TELEGRAM_ID);
+  assert.equal(calls[0].payload.conversationId, TEST_TELEGRAM_ID);
+});
+
 test('Telegram fallback rejects ambiguous sender, provider, chat, account, trigger, session, and run identity', async () => {
   const otherId = '9999999999';
   const variants = [
@@ -950,6 +972,36 @@ test('Telegram fallback rejects ambiguous sender, provider, chat, account, trigg
       runId: 'mixed-provider',
       event: telegramRunEvent('must not run'),
       ctx: telegramContext('mixed-provider', { channel: 'web' })
+    },
+    {
+      runId: 'mixed-event-provider',
+      event: telegramRunEvent('must not run', { channel: 'web' }),
+      ctx: telegramContext('mixed-event-provider')
+    },
+    {
+      runId: 'conflicting-context-channel-id',
+      event: telegramRunEvent('must not run'),
+      ctx: telegramContext('conflicting-context-channel-id', { channelId: otherId })
+    },
+    {
+      runId: 'conflicting-event-channel-id',
+      event: telegramRunEvent('must not run', { channelId: otherId }),
+      ctx: telegramContext('conflicting-event-channel-id')
+    },
+    {
+      runId: 'numeric-context-channel-id',
+      event: telegramRunEvent('must not run'),
+      ctx: telegramContext('numeric-context-channel-id', { channelId: Number(TEST_TELEGRAM_ID) })
+    },
+    {
+      runId: 'padded-event-channel-id',
+      event: telegramRunEvent('must not run', { channelId: ` ${TEST_TELEGRAM_ID}` }),
+      ctx: telegramContext('padded-event-channel-id')
+    },
+    {
+      runId: 'leading-zero-context-channel-id',
+      event: telegramRunEvent('must not run'),
+      ctx: telegramContext('leading-zero-context-channel-id', { channelId: `0${TEST_TELEGRAM_ID}` })
     },
     {
       runId: 'missing-chat',

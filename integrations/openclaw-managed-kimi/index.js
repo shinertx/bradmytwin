@@ -235,6 +235,11 @@ function optionalExact(value, expected, normalizer = (candidate) => candidate) {
   return normalizer(value) === expected;
 }
 
+function optionalTelegramChannelId(value, chatId) {
+  if (value === undefined || value === null) return true;
+  return value === 'telegram' || (Boolean(chatId) && exactTelegramId(value) === chatId);
+}
+
 function matchedManagedPrincipal(identity, providers, principals) {
   for (const provider of providers) {
     for (const principal of principals) {
@@ -296,9 +301,9 @@ function safeOwnerContextShape(event, ctx, config) {
     `telegram_binding_matches=${promptDigest(`telegram:v1:${event?.accountId}:${event?.senderId}:${chat?.id}`) === config.managedTelegramBindingDigest}`,
     `provider_is_exact_telegram=${ctx?.messageProvider === 'telegram'}`,
     `ctx_channel_absent_or_telegram=${optionalExact(ctx?.channel, 'telegram')}`,
-    `ctx_channel_id_absent_or_telegram=${optionalExact(ctx?.channelId, 'telegram')}`,
+    `ctx_channel_id_absent_or_provider_or_chat=${optionalTelegramChannelId(ctx?.channelId, telegramChatId)}`,
     `event_channel_absent_or_telegram=${optionalExact(event?.channel, 'telegram')}`,
-    `event_channel_id_absent_or_telegram=${optionalExact(event?.channelId, 'telegram')}`,
+    `event_channel_id_absent_or_provider_or_chat=${optionalTelegramChannelId(event?.channelId, telegramChatId)}`,
     `trigger_is_user=${ctx?.trigger === 'user'}`,
     `event_trigger_absent_or_user=${optionalExact(event?.trigger, 'user')}`,
     `private_chat_matches_sender=${exactTelegramId(chat?.id) === exactTelegramId(event?.senderId)}`,
@@ -450,7 +455,7 @@ export function createManagedKimiPlugin(options = {}) {
 
       const telegramOwnerProof = (event, ctx) => {
         if (ctx?.messageProvider !== 'telegram') return null;
-        for (const provider of [ctx?.channel, ctx?.channelId, event?.channelId, event?.channel]) {
+        for (const provider of [ctx?.channel, event?.channel]) {
           if (!optionalExact(provider, 'telegram')) return null;
         }
         if (ctx?.trigger !== 'user' || !optionalExact(event?.trigger, 'user')) return null;
@@ -470,6 +475,9 @@ export function createManagedKimiPlugin(options = {}) {
 
         const chatId = exactTelegramId(ctx?.channelContext?.chat?.id);
         if (!chatId || chatId !== eventSenderId) return null;
+        for (const channelId of [ctx?.channelId, event?.channelId]) {
+          if (!optionalTelegramChannelId(channelId, chatId)) return null;
+        }
         for (const conversationId of [
           ctx?.chatId,
           ctx?.conversationId,
