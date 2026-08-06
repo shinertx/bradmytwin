@@ -2,7 +2,7 @@
   "id": "brad-managed-kimi",
   "name": "Brad Managed Kimi Bridge",
   "description": "Correlates managed Kimi runs with exact Brad durable-control-plane claims.",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",

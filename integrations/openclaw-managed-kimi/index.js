@@ -273,6 +273,10 @@ function safeOwnerContextShape(event, ctx, config) {
   const ownerSeparator = config.managedOwnerIdentity.indexOf(':');
   const ownerPrincipal = config.managedOwnerIdentity.slice(ownerSeparator + 1);
   const sessionKey = normalizedString(ctx?.sessionKey);
+  const contextRunId = runIdFrom(ctx);
+  const eventRunId = runIdFrom(event);
+  const telegramSenderId = exactTelegramId(event?.senderId);
+  const telegramChatId = exactTelegramId(chat?.id);
   return [
     `event_keys=${safeMetadataKeys(event)}`,
     `ctx_keys=${safeMetadataKeys(ctx)}`,
@@ -291,8 +295,23 @@ function safeOwnerContextShape(event, ctx, config) {
     `ctx_sender_matches_telegram_digest=${promptDigest(ctx?.senderId) === config.managedTelegramOwnerDigest}`,
     `telegram_binding_matches=${promptDigest(`telegram:v1:${event?.accountId}:${event?.senderId}:${chat?.id}`) === config.managedTelegramBindingDigest}`,
     `provider_is_exact_telegram=${ctx?.messageProvider === 'telegram'}`,
+    `ctx_channel_absent_or_telegram=${optionalExact(ctx?.channel, 'telegram')}`,
+    `ctx_channel_id_absent_or_telegram=${optionalExact(ctx?.channelId, 'telegram')}`,
+    `event_channel_absent_or_telegram=${optionalExact(event?.channel, 'telegram')}`,
+    `event_channel_id_absent_or_telegram=${optionalExact(event?.channelId, 'telegram')}`,
     `trigger_is_user=${ctx?.trigger === 'user'}`,
+    `event_trigger_absent_or_user=${optionalExact(event?.trigger, 'user')}`,
     `private_chat_matches_sender=${exactTelegramId(chat?.id) === exactTelegramId(event?.senderId)}`,
+    `ctx_chat_absent_or_matches=${optionalExact(ctx?.chatId, telegramChatId, exactTelegramId)}`,
+    `ctx_conversation_absent_or_matches=${optionalExact(ctx?.conversationId, telegramChatId, exactTelegramId)}`,
+    `event_chat_absent_or_matches=${optionalExact(event?.chatId, telegramChatId, exactTelegramId)}`,
+    `event_conversation_absent_or_matches=${optionalExact(event?.conversationId, telegramChatId, exactTelegramId)}`,
+    `ctx_account_absent_or_matches=${optionalExact(ctx?.accountId, exactAccountId(event?.accountId), exactAccountId)}`,
+    `ctx_run_id_present=${Boolean(contextRunId)}`,
+    `event_run_id_absent_or_valid=${!Object.hasOwn(event ?? {}, 'runId') || Boolean(eventRunId)}`,
+    `event_run_id_absent_or_matches=${!eventRunId || eventRunId === contextRunId}`,
+    `telegram_sender_is_exact=${Boolean(telegramSenderId)}`,
+    `telegram_chat_is_exact=${Boolean(telegramChatId)}`,
     `session_is_boot=${sessionKey === `agent:${config.managedAgentId}:boot`}`,
     `session_is_main=${sessionKey === `agent:${config.managedAgentId}:${ownerPrincipal}`}`,
     `prompt_present=${Boolean(normalizedString(event?.prompt))}`
