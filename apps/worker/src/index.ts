@@ -4,7 +4,11 @@ import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { CallEClient, MetaWhatsAppClient, TelegramClient, TwilioClient, KmsEnvelope, type CipherBundle } from '@brad/clients';
 import { builtInRunnerRegistry } from './agent-runners.js';
-import { processOneAgentJob, reconcileExpiredAgentLeases } from './conductor.js';
+import {
+  processOneAgentJob,
+  reconcileExpiredAgentLeases,
+  reconcileInterruptedAgentLeases
+} from './conductor.js';
 import { ProcessHermesRunner } from './hermes-runner.js';
 import { digestPayload } from './digest.js';
 import {
@@ -751,12 +755,13 @@ async function drainAgentJobs(): Promise<number> {
 
 async function main(): Promise<void> {
   console.log('worker_started');
-  setInterval(async () => {
+  const timers: NodeJS.Timeout[] = [];
+  timers.push(setInterval(async () => {
     await processApprovals();
-  }, 3000);
-  setInterval(async () => {
+  }, 3000));
+  timers.push(setInterval(async () => {
     await quarantineStaleApprovalClaims();
-  }, 60000);
+  }, 60000));
 
   if (env.BRAD_CONDUCTOR_MODE === 'active') {
     const publisherRedis = createAgentRedis(env.REDIS_URL);
@@ -785,12 +790,17 @@ async function main(): Promise<void> {
     };
 
     await ensureAgentConsumerGroup(consumerRedis, streamConfig);
+    const interrupted = await reconcileInterruptedAgentLeases(pool, env.BRAD_AGENT_WORKER_IDENTITY);
+    if (interrupted.requeued || interrupted.blocked) {
+      console.warn('agent_conductor_restart_recovery', interrupted);
+    }
     await reconcileStaleAgentOutbox(pool);
     await publish();
     await drainAgentJobs();
     const publishTimer = setInterval(() => void publish(), 500);
+    timers.push(publishTimer);
 
-    void (async () => {
+    const consumeLoop = (async () => {
       while (!shuttingDown) {
         try {
           await ensureAgentConsumerGroup(consumerRedis, streamConfig);
@@ -799,13 +809,14 @@ async function main(): Promise<void> {
           await drainAgentJobs();
           await acknowledgeAgentEvents(consumerRedis, streamConfig, eventIds);
         } catch (error) {
+          if (shuttingDown) break;
           console.error('agent_stream_consume_failed', error);
           await new Promise((resolve) => setTimeout(resolve, 2_000));
         }
       }
     })();
 
-    setInterval(async () => {
+    timers.push(setInterval(async () => {
       try {
         const [leases, staleOutbox, staleTelegram] = await Promise.all([
           reconcileExpiredAgentLeases(pool),
@@ -820,16 +831,19 @@ async function main(): Promise<void> {
       } catch (error) {
         console.error('agent_conductor_recovery_failed', error);
       }
-    }, 120000);
+    }, 120000));
 
-    const stop = (): void => {
+    const stop = async (): Promise<void> => {
+      if (shuttingDown) return;
       shuttingDown = true;
-      clearInterval(publishTimer);
+      for (const timer of timers) clearInterval(timer);
       publisherRedis.disconnect();
       consumerRedis.disconnect();
+      await consumeLoop;
+      await pool.end();
     };
-    process.once('SIGTERM', stop);
-    process.once('SIGINT', stop);
+    process.once('SIGTERM', () => void stop());
+    process.once('SIGINT', () => void stop());
   }
 }
 

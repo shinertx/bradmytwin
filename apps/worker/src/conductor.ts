@@ -623,3 +623,61 @@ export async function reconcileExpiredAgentLeases(pool: Pool): Promise<{ requeue
   }
   return { requeued: requeued.rowCount ?? 0, blocked: ambiguous.rowCount ?? 0 };
 }
+
+export async function reconcileInterruptedAgentLeases(
+  pool: Pool,
+  workerIdentity: string
+): Promise<{ requeued: number; blocked: number }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const requeued = await client.query<{ thread_id: string }>(
+      `UPDATE brad_agent_jobs j
+       SET status = 'QUEUED', lease_token = NULL, leased_until = NULL,
+           worker_identity = NULL, next_attempt_at = now(), updated_at = now(),
+           last_error = 'worker_restart_recovery'
+       FROM brad_agent_threads t
+       WHERE j.thread_id = t.id AND j.person_id = t.person_id
+         AND j.status IN ('LEASED','RUNNING') AND j.worker_identity = $1
+         AND COALESCE((t.authority_json->>'externalEffectsAllowed')::boolean, false) = false
+       RETURNING j.thread_id`,
+      [workerIdentity]
+    );
+    if (requeued.rows.length > 0) {
+      await client.query(
+        `UPDATE brad_agent_threads
+         SET status = 'QUEUED', phase = 'RECOVERY', blocker_code = NULL, updated_at = now()
+         WHERE id = ANY($1::uuid[])`,
+        [requeued.rows.map((row) => row.thread_id)]
+      );
+    }
+
+    const ambiguous = await client.query<{ thread_id: string }>(
+      `UPDATE brad_agent_jobs j
+       SET status = 'RECONCILE_REQUIRED', leased_until = NULL,
+           updated_at = now(), last_error = 'worker_restart_external_effect_reconciliation'
+       FROM brad_agent_threads t
+       WHERE j.thread_id = t.id AND j.person_id = t.person_id
+         AND j.status IN ('LEASED','RUNNING') AND j.worker_identity = $1
+         AND COALESCE((t.authority_json->>'externalEffectsAllowed')::boolean, false) = true
+       RETURNING j.thread_id`,
+      [workerIdentity]
+    );
+    if (ambiguous.rows.length > 0) {
+      await client.query(
+        `UPDATE brad_agent_threads
+         SET status = 'BLOCKED', blocker_code = 'AGENT_TURN_RECONCILE_REQUIRED',
+             phase = 'RECOVERY', updated_at = now()
+         WHERE id = ANY($1::uuid[])`,
+        [ambiguous.rows.map((row) => row.thread_id)]
+      );
+    }
+    await client.query('COMMIT');
+    return { requeued: requeued.rowCount ?? 0, blocked: ambiguous.rowCount ?? 0 };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}

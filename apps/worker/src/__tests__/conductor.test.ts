@@ -9,7 +9,11 @@ import { promisify } from 'node:util';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { DeferredManagedKimiRunner, DeterministicVerifierRunner, type AgentRunRequest, type AgentRunResult, type AgentRunner, type AgentRunnerRegistry } from '../agent-runners.js';
-import { processOneAgentJob, reconcileExpiredAgentLeases } from '../conductor.js';
+import {
+  processOneAgentJob,
+  reconcileExpiredAgentLeases,
+  reconcileInterruptedAgentLeases
+} from '../conductor.js';
 import { digestPayload, sha256 } from '../digest.js';
 import {
   acknowledgeAgentEvents,
@@ -763,6 +767,40 @@ describe('Brad multi-agent conductor', () => {
     expect(await reconcileExpiredAgentLeases(pool)).toEqual({ requeued: 0, blocked: 1 });
     const thread = await pool.query(`SELECT status, blocker_code FROM brad_agent_threads WHERE id = $1`, [ids.threadId]);
     expect(thread.rows[0]).toMatchObject({ status: 'BLOCKED', blocker_code: 'AGENT_TURN_RECONCILE_REQUIRED' });
+  });
+
+  it('recovers an interrupted read-only turn immediately but quarantines possible external effects', async () => {
+    if (!pool) return;
+    const ids = await seed(pool);
+    await pool.query(
+      `UPDATE brad_agent_jobs
+       SET status = 'RUNNING', worker_identity = 'test-worker', lease_token = $2,
+           leased_until = now() + interval '5 minutes'
+       WHERE id = $1`,
+      [ids.jobId, randomUUID()]
+    );
+    expect(await reconcileInterruptedAgentLeases(pool, 'test-worker')).toEqual({ requeued: 1, blocked: 0 });
+    expect((await pool.query(`SELECT status, last_error FROM brad_agent_jobs WHERE id = $1`, [ids.jobId])).rows[0])
+      .toMatchObject({ status: 'QUEUED', last_error: 'worker_restart_recovery' });
+
+    await pool.query(
+      `UPDATE brad_agent_threads
+       SET authority_json = jsonb_set(authority_json, '{externalEffectsAllowed}', 'true'::jsonb)
+       WHERE id = $1`,
+      [ids.threadId]
+    );
+    await pool.query(
+      `UPDATE brad_agent_jobs
+       SET status = 'RUNNING', worker_identity = 'test-worker', lease_token = $2,
+           leased_until = now() + interval '5 minutes'
+       WHERE id = $1`,
+      [ids.jobId, randomUUID()]
+    );
+    expect(await reconcileInterruptedAgentLeases(pool, 'test-worker')).toEqual({ requeued: 0, blocked: 1 });
+    expect((await pool.query(`SELECT status, last_error FROM brad_agent_jobs WHERE id = $1`, [ids.jobId])).rows[0])
+      .toMatchObject({ status: 'RECONCILE_REQUIRED', last_error: 'worker_restart_external_effect_reconciliation' });
+    expect((await pool.query(`SELECT status, blocker_code FROM brad_agent_threads WHERE id = $1`, [ids.threadId])).rows[0])
+      .toMatchObject({ status: 'BLOCKED', blocker_code: 'AGENT_TURN_RECONCILE_REQUIRED' });
   });
 
   it('does not commit an agent result after the owner pauses during execution', async () => {
