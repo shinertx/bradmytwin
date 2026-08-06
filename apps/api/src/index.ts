@@ -11,6 +11,7 @@ import { connectorRoutes } from './routes/connectors.js';
 import { approvalRoutes } from './routes/approvals.js';
 import { webChatRoutes } from './routes/web-chat.js';
 import { healthRoutes } from './routes/health.js';
+import { eaRoutes } from './routes/ea.js';
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
@@ -56,9 +57,10 @@ async function buildServer() {
   await app.register(connectorRoutes);
   await app.register(approvalRoutes);
   await app.register(webChatRoutes);
+  await app.register(eaRoutes);
 
   return app;
 }
 
 const app = await buildServer();
-await app.listen({ port: env.PORT, host: '0.0.0.0' });
+await app.listen({ port: env.PORT, host: env.HOST });

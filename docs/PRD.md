@@ -13,6 +13,8 @@ Provide one persistent AI twin per user identity across SMS, WhatsApp, Telegram,
 4. User can request scheduling action.
 5. Event creation only proceeds after approval.
 6. Multiple users can run concurrently without leakage.
+7. User can see one EA Control Tower across Today, Waiting, Approvals, Inbox Signals, Source Records, Monitors, and System Health.
+8. Email/SMS/calendar/portal/manual signals can be ingested and converted into tracked tasks without bypassing approval gates.
 
 ## Non-goals
 - Payments
@@ -20,3 +22,4 @@ Provide one persistent AI twin per user identity across SMS, WhatsApp, Telegram,
 - Autonomous purchases
 - Native mobile app
 - Advanced long-term memory
+- Consciousness or sentience claims

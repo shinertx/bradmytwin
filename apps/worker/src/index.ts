@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { z } from 'zod';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
-import { MetaWhatsAppClient, TelegramClient, TwilioClient, KmsEnvelope, type CipherBundle } from '@brad/clients';
+import { CallEClient, MetaWhatsAppClient, TelegramClient, TwilioClient, KmsEnvelope, type CipherBundle } from '@brad/clients';
 
 dotenv.config();
 
@@ -11,8 +11,10 @@ const env = z
     DATABASE_URL: z.string().default('postgres://postgres:postgres@postgres:5432/brad'),
     TWILIO_ACCOUNT_SID: z.string().optional(),
     TWILIO_AUTH_TOKEN: z.string().optional(),
+    TWILIO_FROM_NUMBER: z.string().optional(),
     TWILIO_SMS_FROM: z.string().optional(),
     TWILIO_WHATSAPP_FROM: z.string().optional(),
+    TWILIO_VOICE_FROM: z.string().optional(),
     META_WHATSAPP_ACCESS_TOKEN: z.string().optional(),
     META_WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
     META_GRAPH_API_VERSION: z.string().default('v22.0'),
@@ -21,6 +23,15 @@ const env = z
     OPENCLAW_URL: z.string().optional(),
     OPENCLAW_API_KEY: z.string().optional(),
     OPENCLAW_MODEL_DEFAULT: z.string().default('gpt-4.1'),
+    DEFAULT_TIMEZONE: z.string().default('America/Chicago'),
+    CALLE_CLI_BIN: z.string().optional(),
+    CALLE_TIMEOUT_SECONDS: z.coerce.number().default(30),
+    CALLE_TELEMETRY: z.preprocess((value) => {
+      if (typeof value === 'string') {
+        return value.toLowerCase() === 'true' || value === '1';
+      }
+      return value;
+    }, z.boolean()).default(false),
     GOOGLE_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_SECRET: z.string().optional(),
     KMS_KEY_NAME: z.string().optional(),
@@ -28,13 +39,22 @@ const env = z
   })
   .parse(process.env);
 
+const twilioSmsFrom = env.TWILIO_SMS_FROM ?? env.TWILIO_FROM_NUMBER;
+
 const pool = new Pool({ connectionString: env.DATABASE_URL });
 const twilio = new TwilioClient(
   env.TWILIO_ACCOUNT_SID,
   env.TWILIO_AUTH_TOKEN,
-  env.TWILIO_SMS_FROM,
-  env.TWILIO_WHATSAPP_FROM
+  twilioSmsFrom,
+  env.TWILIO_WHATSAPP_FROM,
+  env.TWILIO_VOICE_FROM
 );
+const callE = new CallEClient({
+  cliBin: env.CALLE_CLI_BIN,
+  timeoutSeconds: env.CALLE_TIMEOUT_SECONDS,
+  telemetry: env.CALLE_TELEMETRY,
+  timezone: env.DEFAULT_TIMEZONE
+});
 const metaWhatsApp = new MetaWhatsAppClient(
   env.META_WHATSAPP_ACCESS_TOKEN,
   env.META_WHATSAPP_PHONE_NUMBER_ID,
@@ -367,6 +387,54 @@ async function executeWriteTool(row: ApprovalRow): Promise<Record<string, unknow
       [row.person_id, String(args.title || 'Task'), args.dueAt ? String(args.dueAt) : null]
     );
     return { taskId: rows[0]?.id };
+  }
+
+  if (name === 'phone.call_agent') {
+    const toPhones = Array.isArray(args.toPhones) ? args.toPhones.map(String) : [];
+    if (!toPhones.length) {
+      throw new Error('phone_call_missing_to_phone');
+    }
+
+    const result = await callE.startCall({
+      toPhones,
+      goal: String(args.goal || ''),
+      language: typeof args.language === 'string' ? args.language : undefined,
+      region: typeof args.region === 'string' ? args.region : undefined,
+      ttlSeconds: typeof args.ttlSeconds === 'number' ? args.ttlSeconds : undefined
+    });
+
+    return {
+      ok: true,
+      provider: 'call-e',
+      result
+    };
+  }
+
+  if (name === 'phone.call_ivr') {
+    const toPhone = String(args.toPhone || '');
+    const digitSequence = String(args.digitSequence || '');
+    if (!toPhone) {
+      throw new Error('ivr_call_missing_to_phone');
+    }
+    if (!digitSequence) {
+      throw new Error('ivr_call_missing_digits');
+    }
+
+    const result = await twilio.startIvrCall({
+      to: toPhone,
+      goal: String(args.goal || ''),
+      digitSequence,
+      introText: typeof args.introText === 'string' ? args.introText : undefined,
+      waitBeforeDigitsSeconds: typeof args.waitBeforeDigitsSeconds === 'number' ? args.waitBeforeDigitsSeconds : undefined,
+      record: typeof args.record === 'boolean' ? args.record : undefined
+    });
+
+    return {
+      ok: true,
+      provider: 'twilio',
+      mode: 'ivr_dtmf',
+      result
+    };
   }
 
   return {

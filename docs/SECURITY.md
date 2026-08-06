@@ -23,6 +23,9 @@ Write actions require approval:
 - `CREATE_EVENT`
 - `UPDATE_EVENT`
 - `SUBMIT_FORM`
+- `PLACE_PHONE_CALL`
+
+Outbound phone calls are routed through Call-E or Twilio Voice only after approval. Approval previews include the destination phone, goal, and for IVR calls the DTMF sequence so the user can reject accidental or overbroad calls before the worker starts a live run.
 
 ## Beta Guardrails
 - `BETA_ALLOW_UNVERIFIED_WEB` controls temporary web-only access without phone verification.

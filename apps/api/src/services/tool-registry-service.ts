@@ -3,6 +3,7 @@ import type {
   ToolDefinition,
   WriteActionType
 } from '@brad/domain';
+import { CallEClient, TwilioClient } from '@brad/clients';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { env } from '../config/env.js';
@@ -13,6 +14,21 @@ const connectorService = new ConnectorService();
 
 const zDateTime = z.string().min(10);
 const zOptionalDateTime = zDateTime.optional();
+const zE164Phone = z.string().regex(/^\+[1-9]\d{7,14}$/, 'phone_must_be_e164');
+const zDtmfDigits = z.string().regex(/^[0-9*#wW]{1,80}$/, 'digits_must_be_dtmf_sequence');
+const callE = new CallEClient({
+  cliBin: env.CALLE_CLI_BIN,
+  timeoutSeconds: env.CALLE_TIMEOUT_SECONDS,
+  telemetry: env.CALLE_TELEMETRY,
+  timezone: env.DEFAULT_TIMEZONE
+});
+const twilio = new TwilioClient(
+  env.TWILIO_ACCOUNT_SID,
+  env.TWILIO_AUTH_TOKEN,
+  env.TWILIO_SMS_FROM,
+  env.TWILIO_WHATSAPP_FROM,
+  env.TWILIO_VOICE_FROM
+);
 
 type ToolMeta = {
   name: string;
@@ -386,6 +402,111 @@ export class ToolRegistryService {
       isWrite: false
     },
     {
+      name: 'phone.call_agent',
+      description:
+        'Request an outbound phone call by the Call-E voice agent. Use only when the user has asked for a real phone call; this always requires user approval before execution.',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          toPhones: {
+            type: 'array',
+            items: { type: 'string', pattern: '^\\+[1-9]\\d{7,14}$' },
+            minItems: 1,
+            maxItems: 5
+          },
+          goal: {
+            type: 'string',
+            description: 'Concrete call goal, script, allowed commitments, and what information to extract.'
+          },
+          language: { type: 'string' },
+          region: { type: 'string' },
+          ttlSeconds: { type: 'number' }
+        },
+        required: ['toPhones', 'goal'],
+        additionalProperties: false
+      },
+      parser: z.object({
+        toPhones: z.array(zE164Phone).min(1).max(5),
+        goal: z.string().min(10),
+        language: z.string().optional(),
+        region: z.string().optional(),
+        ttlSeconds: z.number().int().min(0).optional()
+      }),
+      isWrite: true,
+      actionType: 'PLACE_PHONE_CALL'
+    },
+    {
+      name: 'phone.get_call_status',
+      description: 'Get status, activity, and result for a previously started Call-E phone run.',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string' },
+          cursor: { type: 'string' },
+          limit: { type: 'number' }
+        },
+        required: ['runId'],
+        additionalProperties: false
+      },
+      parser: z.object({
+        runId: z.string().min(1),
+        cursor: z.string().optional(),
+        limit: z.number().int().min(1).max(50).optional()
+      }),
+      isWrite: false
+    },
+    {
+      name: 'phone.call_ivr',
+      description:
+        'Request a deterministic outbound IVR/keypad call through Twilio. Use when the known task requires pressing phone-menu digits; this always requires user approval before execution.',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          toPhone: { type: 'string', pattern: '^\\+[1-9]\\d{7,14}$' },
+          goal: {
+            type: 'string',
+            description: 'Concrete call goal, allowed commitments, and what success looks like.'
+          },
+          digitSequence: {
+            type: 'string',
+            pattern: '^[0-9*#wW]{1,80}$',
+            description: 'DTMF sequence to play after connect. Use w for short pauses.'
+          },
+          introText: { type: 'string' },
+          waitBeforeDigitsSeconds: { type: 'number' },
+          record: { type: 'boolean' }
+        },
+        required: ['toPhone', 'goal', 'digitSequence'],
+        additionalProperties: false
+      },
+      parser: z.object({
+        toPhone: zE164Phone,
+        goal: z.string().min(10),
+        digitSequence: zDtmfDigits,
+        introText: z.string().max(240).optional(),
+        waitBeforeDigitsSeconds: z.number().int().min(0).max(30).optional(),
+        record: z.boolean().optional()
+      }),
+      isWrite: true,
+      actionType: 'PLACE_PHONE_CALL'
+    },
+    {
+      name: 'phone.get_ivr_call_status',
+      description: 'Get Twilio status for a previously started deterministic IVR/keypad call.',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          callSid: { type: 'string' }
+        },
+        required: ['callSid'],
+        additionalProperties: false
+      },
+      parser: z.object({
+        callSid: z.string().min(2)
+      }),
+      isWrite: false
+    },
+    {
       name: 'browser.fetch_page',
       description: 'Fetch text content from an allowlisted URL.',
       jsonSchema: {
@@ -529,6 +650,17 @@ export class ToolRegistryService {
         return await this.execTaskCreate(personId, call.args);
       case 'tasks.list':
         return await this.execTaskList(personId, call.args);
+      case 'phone.call_agent':
+      case 'phone.call_ivr':
+        return {
+          output: {},
+          errorCode: 'phone_call_requires_approval',
+          manualNextStep: 'Approve the phone call before it can be placed.'
+        };
+      case 'phone.get_call_status':
+        return await this.execPhoneCallStatus(call.args);
+      case 'phone.get_ivr_call_status':
+        return await this.execIvrCallStatus(call.args);
       case 'browser.fetch_page':
         return await this.execBrowserFetch(call.args);
       case 'browser.extract_structured':
@@ -780,6 +912,36 @@ export class ToolRegistryService {
     );
 
     return { output: { tasks: rows } };
+  }
+
+  private async execPhoneCallStatus(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+    try {
+      const status = await callE.getCallStatus({
+        runId: String(args.runId),
+        cursor: typeof args.cursor === 'string' ? args.cursor : undefined,
+        limit: typeof args.limit === 'number' ? args.limit : undefined
+      });
+      return { output: status };
+    } catch (error) {
+      return {
+        output: { error: error instanceof Error ? error.message : 'unknown_call_status_error' },
+        errorCode: 'phone_call_status_unavailable',
+        manualNextStep: 'Check Call-E auth status and retry the call status lookup.'
+      };
+    }
+  }
+
+  private async execIvrCallStatus(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+    try {
+      const status = await twilio.getCall(String(args.callSid));
+      return { output: status };
+    } catch (error) {
+      return {
+        output: { error: error instanceof Error ? error.message : 'unknown_ivr_call_status_error' },
+        errorCode: 'ivr_call_status_unavailable',
+        manualNextStep: 'Check Twilio voice credentials and retry the IVR call status lookup.'
+      };
+    }
   }
 
   private async execBrowserFetch(args: Record<string, unknown>): Promise<ToolExecutionResult> {

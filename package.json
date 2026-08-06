@@ -14,5 +14,8 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@call-e/cli": "^0.3.6"
   }
 }

@@ -43,7 +43,7 @@
       .card h2 { margin: 0 0 8px; font-size: 18px; font-family: "Space Grotesk", sans-serif; }
       .muted { color: var(--muted); }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-word; color: #223041; }
-      input, textarea, button {
+      input, textarea, button, select {
         width: 100%;
         border-radius: 10px;
         border: 1px solid #bcc5d3;
@@ -63,6 +63,14 @@
       button.light { background: #fff; color: var(--ink); border: 1px solid var(--line); }
       .row { display: flex; gap: 8px; }
       .row > * { flex: 1; }
+      .tower { margin-top: 16px; display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+      .metric { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 12px; }
+      .metric strong { display: block; font-size: 24px; font-family: "Space Grotesk", sans-serif; }
+      .list { display: grid; gap: 8px; max-height: 320px; overflow: auto; }
+      .item { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
+      .itemTop { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+      .tag { border-radius: 999px; padding: 3px 8px; font-size: 11px; color: #18304a; background: #eef4fb; white-space: nowrap; }
+      .danger { color: #9d2727; }
       #authState, #connectorState { margin-top: 8px; }
       #chatLog {
         max-height: 320px;
@@ -85,6 +93,8 @@
       }
       @media (max-width: 700px) {
         .brand { font-size: 27px; }
+        .tower { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+        .row { flex-direction: column; }
       }
     </style>
   </head>
@@ -140,6 +150,86 @@
           </section>
         </div>
 
+        <div class="tower" id="towerMetrics"></div>
+
+        <div class="shell" style="margin-top: 16px;">
+          <section class="card">
+            <h2>Today</h2>
+            <div id="todayList" class="list"></div>
+          </section>
+          <section class="card">
+            <h2>Waiting</h2>
+            <div id="waitingList" class="list"></div>
+          </section>
+          <section class="card">
+            <h2>Inbox Signals</h2>
+            <div id="signalList" class="list"></div>
+          </section>
+        </div>
+
+        <div class="shell" style="margin-top: 16px;">
+          <section class="card">
+            <h2>Add Signal</h2>
+            <div class="row">
+              <select id="signalSource">
+                <option>EMAIL</option>
+                <option>SMS</option>
+                <option>CALENDAR</option>
+                <option>PORTAL</option>
+                <option>DRIVE</option>
+                <option>MANUAL</option>
+              </select>
+              <input id="signalSender" placeholder="Sender" />
+            </div>
+            <input id="signalSubject" placeholder="Subject" />
+            <textarea id="signalBody" rows="4" placeholder="Paste email, SMS, portal note, or reminder"></textarea>
+            <button id="ingestSignal" class="success">Add to Control Tower</button>
+            <p id="signalState" class="mono"></p>
+          </section>
+          <section class="card">
+            <h2>Add Source Record</h2>
+            <div class="row">
+              <select id="sourceType">
+                <option>PERSON</option>
+                <option>ENTITY</option>
+                <option>ACCOUNT</option>
+                <option>CASE</option>
+                <option>VENDOR</option>
+                <option>PROPERTY</option>
+                <option>PREFERENCE</option>
+                <option>DEADLINE</option>
+                <option>OTHER</option>
+              </select>
+              <select id="sourceConfidence">
+                <option>UNVERIFIED</option>
+                <option>USER_ATTESTED</option>
+                <option>SOURCE_BACKED</option>
+              </select>
+            </div>
+            <input id="sourceTitle" placeholder="Title" />
+            <textarea id="sourceSummary" rows="3" placeholder="Operating truth or proof note"></textarea>
+            <button id="addSourceRecord" class="secondary">Save Source Record</button>
+            <p id="sourceState" class="mono"></p>
+          </section>
+          <section class="card">
+            <h2>Monitors</h2>
+            <div class="row">
+              <select id="monitorType">
+                <option>EMAIL</option>
+                <option>SMS</option>
+                <option>CALENDAR</option>
+                <option>DRIVE</option>
+                <option>TASKS</option>
+                <option>PORTAL</option>
+                <option>SYSTEM</option>
+              </select>
+              <input id="monitorName" placeholder="Monitor name" />
+            </div>
+            <button id="addMonitor" class="secondary">Activate Monitor</button>
+            <div id="monitorList" class="list" style="margin-top: 10px;"></div>
+          </section>
+        </div>
+
         <div class="shell" style="margin-top: 16px;">
           <section class="card">
             <h2>Web Chat</h2>
@@ -151,6 +241,10 @@
             <h2>Approvals</h2>
             <button id="loadApprovals" class="secondary">Refresh Approvals</button>
             <div id="approvals" class="mono"></div>
+          </section>
+          <section class="card">
+            <h2>System Health</h2>
+            <div id="systemHealth" class="mono"></div>
           </section>
         </div>
       </section>
@@ -169,9 +263,24 @@
       const connectorState = document.getElementById('connectorState');
       const chatLog = document.getElementById('chatLog');
       const phoneBanner = document.getElementById('phoneBanner');
+      const towerMetrics = document.getElementById('towerMetrics');
+      const todayList = document.getElementById('todayList');
+      const waitingList = document.getElementById('waitingList');
+      const signalList = document.getElementById('signalList');
+      const monitorList = document.getElementById('monitorList');
+      const systemHealth = document.getElementById('systemHealth');
 
       function setState(el, text) { el.textContent = text; }
       function authHeader() { return token ? { Authorization: `Bearer ${token}` } : {}; }
+      function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;'
+        }[char]));
+      }
 
       async function call(path, options = {}) {
         const headers = {
@@ -207,6 +316,7 @@
         }
         setState(meState, JSON.stringify(out.data, null, 2));
         phoneBanner.classList.toggle('hidden', Boolean(out.data.phoneVerified));
+        await refreshDashboard();
       }
 
       document.getElementById('loginGoogle').onclick = () => {
@@ -263,6 +373,140 @@
         if (!text) return;
         await call('/web/chat/messages', { method: 'POST', body: JSON.stringify({ text }) });
         document.getElementById('chatInput').value = '';
+        await refreshDashboard();
+      };
+
+      function renderTaskList(el, tasks) {
+        if (!tasks?.length) {
+          el.innerHTML = '<p class="muted">Clear.</p>';
+          return;
+        }
+        el.innerHTML = tasks.map((task) => `
+          <div class="item">
+            <div class="itemTop">
+              <strong>${escapeHtml(task.title)}</strong>
+              <span class="tag">${escapeHtml(task.priority)}</span>
+            </div>
+            <div class="muted">${escapeHtml(task.category)}${task.waiting_on ? ` · waiting on ${escapeHtml(task.waiting_on)}` : ''}</div>
+            ${task.notes ? `<div class="mono">${escapeHtml(task.notes)}</div>` : ''}
+            <button class="light" data-complete-task="${escapeHtml(task.id)}">Done</button>
+          </div>
+        `).join('');
+      }
+
+      function renderSignals(signals) {
+        if (!signals?.length) {
+          signalList.innerHTML = '<p class="muted">No signals yet.</p>';
+          return;
+        }
+        signalList.innerHTML = signals.map((signal) => `
+          <div class="item">
+            <div class="itemTop">
+              <strong>${escapeHtml(signal.subject || signal.sender || signal.source_type)}</strong>
+              <span class="tag">${escapeHtml(signal.classification)}</span>
+            </div>
+            <div class="muted">${escapeHtml(signal.source_type)} · ${escapeHtml(signal.priority)}</div>
+            <div>${escapeHtml(signal.body_preview)}</div>
+          </div>
+        `).join('');
+      }
+
+      function renderMonitors(monitors) {
+        if (!monitors?.length) {
+          monitorList.innerHTML = '<p class="muted">No monitors active.</p>';
+          return;
+        }
+        monitorList.innerHTML = monitors.map((monitor) => `
+          <div class="item">
+            <div class="itemTop">
+              <strong>${escapeHtml(monitor.name)}</strong>
+              <span class="tag">${escapeHtml(monitor.status)}</span>
+            </div>
+            <div class="muted">${escapeHtml(monitor.monitor_type)} · every ${escapeHtml(monitor.cadence_minutes)} min</div>
+            ${monitor.last_error ? `<div class="danger">${escapeHtml(monitor.last_error)}</div>` : ''}
+          </div>
+        `).join('');
+      }
+
+      async function refreshDashboard() {
+        if (!token) return;
+        const out = await call('/ea/dashboard', { method: 'GET' });
+        if (!out.ok) return;
+        const data = out.data;
+        towerMetrics.innerHTML = [
+          ['Open Tasks', data.summary.openTasks],
+          ['New Signals', data.summary.newSignals],
+          ['Approvals', data.summary.pendingApprovals],
+          ['Monitors', data.summary.activeMonitors]
+        ].map(([label, value]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span class="muted">${escapeHtml(label)}</span></div>`).join('');
+        renderTaskList(todayList, data.today);
+        renderTaskList(waitingList, data.waiting);
+        renderSignals(data.signals);
+        renderMonitors(data.monitors);
+        systemHealth.textContent = JSON.stringify(data.system, null, 2);
+      }
+
+      document.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const taskId = target.dataset.completeTask;
+        if (!taskId) return;
+        await call(`/ea/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify({ status: 'DONE' }) });
+        await refreshDashboard();
+      });
+
+      document.getElementById('ingestSignal').onclick = async () => {
+        const bodyPreview = document.getElementById('signalBody').value.trim();
+        if (!bodyPreview) return;
+        const out = await call('/ea/signals', {
+          method: 'POST',
+          body: JSON.stringify({
+            sourceType: document.getElementById('signalSource').value,
+            sender: document.getElementById('signalSender').value.trim() || undefined,
+            subject: document.getElementById('signalSubject').value.trim() || undefined,
+            bodyPreview
+          })
+        });
+        document.getElementById('signalState').textContent = JSON.stringify(out.data, null, 2);
+        if (out.ok) {
+          document.getElementById('signalBody').value = '';
+          document.getElementById('signalSubject').value = '';
+          await refreshDashboard();
+        }
+      };
+
+      document.getElementById('addSourceRecord').onclick = async () => {
+        const title = document.getElementById('sourceTitle').value.trim();
+        if (!title) return;
+        const out = await call('/ea/source-records', {
+          method: 'POST',
+          body: JSON.stringify({
+            recordType: document.getElementById('sourceType').value,
+            confidence: document.getElementById('sourceConfidence').value,
+            title,
+            summary: document.getElementById('sourceSummary').value.trim() || undefined
+          })
+        });
+        document.getElementById('sourceState').textContent = JSON.stringify(out.data, null, 2);
+        if (out.ok) {
+          document.getElementById('sourceTitle').value = '';
+          document.getElementById('sourceSummary').value = '';
+          await refreshDashboard();
+        }
+      };
+
+      document.getElementById('addMonitor').onclick = async () => {
+        const name = document.getElementById('monitorName').value.trim();
+        if (!name) return;
+        await call('/ea/monitors', {
+          method: 'POST',
+          body: JSON.stringify({
+            monitorType: document.getElementById('monitorType').value,
+            name
+          })
+        });
+        document.getElementById('monitorName').value = '';
+        await refreshDashboard();
       };
 
       async function refreshChat() {
@@ -316,9 +560,11 @@
       if (token) {
         refreshMe();
         refreshChat();
+        refreshDashboard();
       }
       setInterval(() => {
         refreshChat();
+        refreshDashboard();
       }, 5000);
     </script>
   </body>

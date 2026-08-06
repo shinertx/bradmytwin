@@ -10,9 +10,13 @@ dotenv.config();
 const app = Fastify({ logger: true });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const staticRoot = fs.existsSync(path.join(__dirname, 'public'))
-  ? path.join(__dirname, 'public')
-  : path.join(process.cwd(), 'apps/web/src/public');
+const staticRootCandidates = [
+  path.join(__dirname, 'public'),
+  path.join(__dirname, '../src/public'),
+  path.join(process.cwd(), 'src/public'),
+  path.join(process.cwd(), 'apps/web/src/public')
+];
+const staticRoot = staticRootCandidates.find((candidate) => fs.existsSync(candidate)) ?? staticRootCandidates[0];
 
 await app.register(fastifyStatic, {
   root: staticRoot,
@@ -28,4 +32,5 @@ app.get('/config.js', async (_, reply) => {
 app.get('/healthz', async () => ({ ok: true, service: 'web' }));
 
 const port = Number(process.env.PORT ?? 5173);
-await app.listen({ port, host: '0.0.0.0' });
+const host = process.env.HOST ?? '127.0.0.1';
+await app.listen({ port, host });

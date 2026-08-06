@@ -11,7 +11,8 @@ export type WriteActionType =
   | 'SEND_EMAIL'
   | 'CREATE_EVENT'
   | 'UPDATE_EVENT'
-  | 'SUBMIT_FORM';
+  | 'SUBMIT_FORM'
+  | 'PLACE_PHONE_CALL';
 
 export interface Person {
   id: string;

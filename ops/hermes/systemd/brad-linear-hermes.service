@@ -1,0 +1,17 @@
+[Unit]
+Description=Brad Linear command bridge and bounded Hermes dispatcher
+After=network-online.target hermes-serve.service brad-worker.service
+Wants=network-online.target hermes-serve.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/benjijmac/bradmytwin
+Environment=NODE_ENV=production
+EnvironmentFile=/home/benjijmac/.config/brad/linear-hermes.env
+ExecStart=/usr/bin/node apps/worker/dist/linear-hermes-daemon.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

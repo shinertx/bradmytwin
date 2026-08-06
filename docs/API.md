@@ -29,6 +29,7 @@
     - `pendingApprovals: Array<{ id, actionType }>`
     - `runId`
     - `sessionId`
+  - The runtime tool allowlist includes `phone.call_agent` for approved outbound Call-E voice-agent calls, `phone.call_ivr` for approved Twilio keypad/DTMF calls, and read-only status tools for both providers.
 - `GET /web/chat/stream` SSE snapshot stream (JWT required)
 
 ## Approvals
@@ -37,6 +38,17 @@
 - `POST /approvals/:token/reject`
 - `GET /approvals` (JWT required)
   - Response now includes `tool_name`, `tool_input_preview`, `origin_channel`, and `status_detail`
+
+## EA Control Tower
+- `GET /ea/dashboard` (JWT required)
+  - Returns Today, Waiting, Approvals, Signals, Source Records, Monitors, Connectors, Audit, and redacted system readiness.
+- `POST /ea/signals` (JWT required)
+  - Body: `{ "sourceType": "EMAIL" | "SMS" | "...", "sender"?: "...", "subject"?: "...", "bodyPreview": "...", "sourceRef"?: "...", "occurredAt"?: ISODate }`
+  - Classifies inbound email/SMS/calendar/portal/etc. signals and auto-creates a tracked task when the signal requires action.
+- `POST /ea/tasks` (JWT required)
+- `PATCH /ea/tasks/:id` (JWT required)
+- `POST /ea/source-records` (JWT required)
+- `POST /ea/monitors` (JWT required)
 
 ## Health
 - `GET /healthz`

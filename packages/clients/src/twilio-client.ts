@@ -5,7 +5,8 @@ export class TwilioClient {
     private readonly accountSid?: string,
     private readonly authToken?: string,
     private readonly fromPhone?: string,
-    private readonly whatsappFrom?: string
+    private readonly whatsappFrom?: string,
+    private readonly voiceFrom?: string
   ) {}
 
   async sendSms(to: string, body: string): Promise<void> {
@@ -24,6 +25,63 @@ export class TwilioClient {
     }
 
     await this.sendMessage({ to: `whatsapp:${to}`, body, from: this.whatsappFrom });
+  }
+
+  async startIvrCall(input: {
+    to: string;
+    goal: string;
+    digitSequence: string;
+    introText?: string;
+    waitBeforeDigitsSeconds?: number;
+    record?: boolean;
+  }): Promise<Record<string, unknown>> {
+    const from = this.voiceFrom ?? this.fromPhone;
+    if (!this.accountSid || !this.authToken || !from) {
+      console.log('[twilio:dev] IVR call', {
+        to: input.to,
+        goal: input.goal,
+        digitSequence: input.digitSequence,
+        waitBeforeDigitsSeconds: input.waitBeforeDigitsSeconds ?? 2,
+        record: input.record ?? true
+      });
+      return {
+        sid: 'dev-twilio-ivr-call',
+        status: 'dev_logged',
+        provider: 'twilio',
+        to: input.to
+      };
+    }
+
+    const waitSeconds = Math.max(0, Math.min(30, input.waitBeforeDigitsSeconds ?? 2));
+    const introText = input.introText ?? 'This is an automated assistant call. Please hold.';
+    const twiml = [
+      '<Response>',
+      `<Say voice="alice">${this.escapeXml(introText)}</Say>`,
+      waitSeconds > 0 ? `<Pause length="${waitSeconds}" />` : '',
+      `<Play digits="${this.escapeXml(input.digitSequence)}" />`,
+      '</Response>'
+    ].filter(Boolean).join('');
+
+    const encoded = new URLSearchParams({
+      To: input.to,
+      From: from,
+      Twiml: twiml,
+      Record: String(input.record ?? true)
+    });
+
+    return await this.twilioRequest('POST', `Calls.json`, encoded);
+  }
+
+  async getCall(callSid: string): Promise<Record<string, unknown>> {
+    if (!this.accountSid || !this.authToken) {
+      return {
+        sid: callSid,
+        status: 'dev_unconfigured',
+        provider: 'twilio'
+      };
+    }
+
+    return await this.twilioRequest('GET', `Calls/${encodeURIComponent(callSid)}.json`);
   }
 
   validateSignature(url: string, params: Record<string, string>, signature?: string): boolean {
@@ -46,22 +104,46 @@ export class TwilioClient {
       Body: input.body
     });
 
-    const token = Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64');
-    const res = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Messages.json`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${token}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: encoded
-      }
-    );
+    const res = await this.rawTwilioRequest('POST', 'Messages.json', encoded);
 
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`twilio_send_failed:${res.status}:${text}`);
     }
+  }
+
+  private async twilioRequest(method: 'GET' | 'POST', path: string, body?: URLSearchParams): Promise<Record<string, unknown>> {
+    const res = await this.rawTwilioRequest(method, path, body);
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`twilio_voice_failed:${res.status}:${text}`);
+    }
+
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  private async rawTwilioRequest(method: 'GET' | 'POST', path: string, body?: URLSearchParams): Promise<Response> {
+    const token = Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64');
+    return await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/${path}`,
+      {
+        method,
+        headers: {
+          Authorization: `Basic ${token}`,
+          ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {})
+        },
+        body
+      }
+    );
+  }
+
+  private escapeXml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
   }
 }
