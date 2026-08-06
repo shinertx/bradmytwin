@@ -373,6 +373,63 @@ test('managed Kimi uses the official stable run id when the channel emits no inb
   assert.equal(calls[0].payload.channel, 'KIMI');
 });
 
+test('managed Kimi accepts the official owner verdict when the connector redacts identity fields', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+  const ctx = kimiContext('redacted-live-owner', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    senderId: undefined,
+    accountId: undefined
+  });
+  const event = runEvent('managed redacted owner', {
+    channelId: undefined,
+    senderId: undefined,
+    accountId: undefined,
+    senderIsOwner: true
+  });
+
+  assert.equal(await api.handlers.get('before_agent_run')(event, ctx), undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].payload.externalMessageId, 'openclaw-run:redacted-live-owner');
+  assert.equal(calls[0].payload.senderId, 'main');
+  assert.equal(calls[0].payload.channel, 'KIMI');
+});
+
+test('redacted identity fields without the official owner verdict fail closed', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({ gateway: async (...args) => { calls.push(args); return claim('unsafe'); } }).register(api);
+  const ctx = kimiContext('redacted-non-owner', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    senderId: undefined,
+    accountId: undefined
+  });
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('must not run', {
+      channelId: undefined,
+      senderId: undefined,
+      accountId: undefined,
+      senderIsOwner: false
+    }),
+    ctx
+  );
+
+  assert.equal(result.outcome, 'block');
+  assert.deepEqual(calls, []);
+  assert.equal(api.warnings[0], 'Brad managed intake blocked: managed_kimi_inbound_hooks_not_emitted');
+  assertSafeOwnerShapeWarning(api.warnings[1]);
+});
+
 test('run-id fallback is unavailable outside the exact managed Kimi channel', async () => {
   const calls = [];
   const api = fakeApi();

@@ -402,7 +402,18 @@ export function createManagedKimiPlugin(options = {}) {
       };
 
       const buildManagedKimiRunFallback = (event, ctx, runId) => {
-        if (sourceChannel(event, ctx) !== 'KIMI') return null;
+        const detectedChannel = sourceChannel(event, ctx);
+        const explicitProviders = boundedContextValues(
+          [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel],
+          128
+        );
+        const authenticatedOwnerWithoutIdentity = detectedChannel === 'WEB'
+          && explicitProviders.length === 0
+          && event?.senderIsOwner === true;
+        if (detectedChannel !== 'KIMI' && !authenticatedOwnerWithoutIdentity) return null;
+        const ownerSeparator = config.managedOwnerIdentity.indexOf(':');
+        const configuredProvider = config.managedOwnerIdentity.slice(0, ownerSeparator);
+        const configuredPrincipal = config.managedOwnerIdentity.slice(ownerSeparator + 1);
         const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
         const conversationId = boundedContextValue(
           [ctx?.chatId, ctx?.channelId, event?.channelId, sessionKey],
@@ -412,14 +423,27 @@ export function createManagedKimiPlugin(options = {}) {
           externalMessageId: `openclaw-run:${runId}`,
           sessionKey,
           conversationId,
-          senderId: boundedContextValue([event?.senderId, ctx?.senderId], 256),
-          accountId: boundedContextValue([event?.accountId, ctx?.accountId], 256),
+          senderId: boundedContextValue(
+            [event?.senderId, ctx?.senderId, authenticatedOwnerWithoutIdentity ? configuredPrincipal : ''],
+            256
+          ),
+          accountId: boundedContextValue(
+            [event?.accountId, ctx?.accountId, authenticatedOwnerWithoutIdentity ? configuredPrincipal : ''],
+            256
+          ),
           provider: boundedContextValue(
-            [event?.channelId, ctx?.messageProvider, ctx?.channel],
+            [
+              event?.channelId,
+              ctx?.messageProvider,
+              ctx?.channel,
+              authenticatedOwnerWithoutIdentity ? configuredProvider : ''
+            ],
             128
           ).toLowerCase(),
           channel: 'KIMI',
-          correlationSource: 'before_agent_run',
+          correlationSource: authenticatedOwnerWithoutIdentity
+            ? 'before_agent_run_owner_verdict'
+            : 'before_agent_run',
           createdAt: now()
         };
       };
