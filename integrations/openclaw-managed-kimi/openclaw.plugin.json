@@ -2,12 +2,12 @@
   "id": "brad-managed-kimi",
   "name": "Brad Managed Kimi Bridge",
   "description": "Correlates managed Kimi runs with exact Brad durable-control-plane claims.",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["managedAgentId", "managedMainAccountDigest", "managedOwnerIdentity", "modelProvider", "model", "recoveryEnabled"],
+    "required": ["managedAgentId", "managedMainAccountDigest", "managedOwnerIdentity", "managedTelegramOwnerDigest", "modelProvider", "model", "recoveryEnabled"],
     "properties": {
       "managedAgentId": {
         "type": "string",
@@ -28,6 +28,13 @@
         "maxLength": 384,
         "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._:-]*$",
         "description": "Exact authenticated managed-channel identity, such as kimi-claw:main."
+      },
+      "managedTelegramOwnerDigest": {
+        "type": "string",
+        "minLength": 64,
+        "maxLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "SHA-256 fingerprint of the one paired Telegram owner ID allowed to enter the managed Brad session."
       },
       "modelProvider": {
         "type": "string",

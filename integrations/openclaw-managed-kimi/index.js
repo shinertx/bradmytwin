@@ -17,6 +17,7 @@ const CONFIG_KEYS = new Set([
   'managedAgentId',
   'managedMainAccountDigest',
   'managedOwnerIdentity',
+  'managedTelegramOwnerDigest',
   'modelProvider',
   'model',
   'recoveryEnabled'
@@ -172,6 +173,12 @@ function parsePluginConfig(pluginConfig) {
       /^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._:-]*$/,
       384
     ).toLowerCase(),
+    managedTelegramOwnerDigest: configString(
+      pluginConfig,
+      'managedTelegramOwnerDigest',
+      /^[0-9a-f]{64}$/,
+      64
+    ).toLowerCase(),
     modelProvider: configString(pluginConfig, 'modelProvider', /^[A-Za-z0-9][A-Za-z0-9._-]*$/, 128),
     model: configString(pluginConfig, 'model', /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 256),
     recoveryEnabled: pluginConfig.recoveryEnabled
@@ -250,6 +257,8 @@ function safeOwnerContextShape(event, ctx, config) {
     `ctx_account_present=${Boolean(normalizedString(ctx?.accountId))}`,
     `event_account_matches_owner=${normalizedString(event?.accountId).toLowerCase() === ownerPrincipal}`,
     `event_account_matches_managed_digest=${promptDigest(event?.accountId) === config.managedMainAccountDigest}`,
+    `event_sender_matches_telegram_digest=${promptDigest(event?.senderId) === config.managedTelegramOwnerDigest}`,
+    `ctx_sender_matches_telegram_digest=${promptDigest(ctx?.senderId) === config.managedTelegramOwnerDigest}`,
     `session_is_boot=${sessionKey === `agent:${config.managedAgentId}:boot`}`,
     `session_is_main=${sessionKey === `agent:${config.managedAgentId}:${ownerPrincipal}`}`,
     `prompt_present=${Boolean(normalizedString(event?.prompt))}`
@@ -385,6 +394,19 @@ export function createManagedKimiPlugin(options = {}) {
         && !normalizedString(ctx?.senderId)
         && promptDigest(event?.accountId) === config.managedMainAccountDigest
       );
+
+      const isAuthenticatedTelegramOwnerRun = (event, ctx) => {
+        const providers = boundedContextValues(
+          [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel],
+          128
+        ).map((provider) => provider.toLowerCase());
+        const senders = boundedContextValues([event?.senderId, ctx?.senderId], 256);
+        return boundedContextValue([ctx?.sessionKey], 512) === managedMainSessionKey
+          && event?.senderIsOwner === true
+          && providers.includes('telegram')
+          && senders.length === 1
+          && promptDigest(senders[0]) === config.managedTelegramOwnerDigest;
+      };
 
       const stopHeartbeat = (state) => {
         if (!state?.heartbeat) return;
@@ -528,7 +550,13 @@ export function createManagedKimiPlugin(options = {}) {
           && explicitProviders.length === 0
           && event?.senderIsOwner === true;
         const authenticatedManagedMain = isAuthenticatedManagedMainRun(event, ctx);
-        if (detectedChannel !== 'KIMI' && !authenticatedOwnerWithoutIdentity && !authenticatedManagedMain) {
+        const authenticatedTelegramOwner = isAuthenticatedTelegramOwnerRun(event, ctx);
+        if (
+          detectedChannel !== 'KIMI'
+          && !authenticatedOwnerWithoutIdentity
+          && !authenticatedManagedMain
+          && !authenticatedTelegramOwner
+        ) {
           return null;
         }
         const configuredProvider = config.managedOwnerIdentity.slice(0, ownerSeparator);
@@ -559,12 +587,15 @@ export function createManagedKimiPlugin(options = {}) {
               event?.channelId,
               ctx?.messageProvider,
               ctx?.channel,
+              authenticatedTelegramOwner ? 'telegram' : '',
               authenticatedOwnerWithoutIdentity || authenticatedManagedMain ? configuredProvider : ''
             ],
             128
           ).toLowerCase(),
-          channel: 'KIMI',
-          correlationSource: authenticatedOwnerWithoutIdentity
+          channel: authenticatedTelegramOwner ? 'TELEGRAM' : 'KIMI',
+          correlationSource: authenticatedTelegramOwner
+            ? 'before_agent_run_telegram_owner'
+            : authenticatedOwnerWithoutIdentity
             ? 'before_agent_run_owner_verdict'
             : authenticatedManagedMain
               ? 'before_agent_run_managed_main'
@@ -596,15 +627,18 @@ export function createManagedKimiPlugin(options = {}) {
           principals
         );
         const authenticatedManagedMain = isAuthenticatedManagedMainRun(event, ctx);
+        const authenticatedTelegramOwner = isAuthenticatedTelegramOwnerRun(event, ctx);
         const senderId = managedPrincipal
           || (authenticatedManagedMain ? configuredOwnerPrincipal : principals[0])
           || '';
         const channel = inbound.correlationSource === 'message_received' && inbound.channel === 'WEB'
           ? sourceChannel(event, ctx)
           : inbound.channel;
-        const ownerVerified = event?.senderIsOwner === true
-          || (channel === 'KIMI' && Boolean(managedPrincipal))
-          || authenticatedManagedMain;
+        const ownerVerified = channel === 'TELEGRAM'
+          ? authenticatedTelegramOwner
+          : event?.senderIsOwner === true
+            || (channel === 'KIMI' && Boolean(managedPrincipal))
+            || authenticatedManagedMain;
         if (!ownerVerified) {
           throw new Error(ownerProofFailure(config.managedOwnerIdentity, providers, principals));
         }

@@ -53,9 +53,10 @@ Keep normal Telegram and API intake in `shadow` until all tests pass. The worker
 
 Rollback is one configuration change: restore `BRAD_CONDUCTOR_MODE=shadow` and restart the API and worker. This preserves all objectives, messages, evidence, and audit state.
 
-## Kimi And Buzz Cutover
+## Kimi, Telegram, And Buzz Cutover
 
-- Link Kimi to the existing GCP OpenClaw through Kimi's official **Link Existing OpenClaw** flow. Do not create a second Telegram consumer.
+- The managed Kimi Claw named `Brad` is the primary executive candidate. The GCP OpenClaw gateway remains an inactive conversational rollback runtime while the GCP Brad API/Postgres/worker services remain authoritative and active.
+- Telegram must have one polling consumer. Follow [`docs/operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md`](./operations/MANAGED_KIMI_TELEGRAM_CUTOVER.md) for the current ownership record and fail-closed rollback.
 - Back up `openclaw.json` before the plugin install and retain the current model as rollback.
 - Confirm the linked runtime reports the intended Kimi model before changing the worker model profile.
 - Buzz Desktop `0.5.5` is the promotion target. Preserve the existing identity and prove relay readiness plus a signed message before and after the upgrade.
@@ -75,6 +76,7 @@ The non-bundled `brad-managed-kimi` plugin must be loaded only on a supported ma
     "managedAgentId": "main",
     "managedMainAccountDigest": "<sha256-account-fingerprint>",
     "managedOwnerIdentity": "kimi-claw:main",
+    "managedTelegramOwnerDigest": "<sha256-paired-telegram-owner-id>",
     "modelProvider": "kimi-coding",
     "model": "k2p6",
     "recoveryEnabled": true

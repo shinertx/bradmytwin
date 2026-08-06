@@ -8,6 +8,7 @@ const CONFIG = {
   managedAgentId: 'brad-runtime',
   managedMainAccountDigest: createHash('sha256').update('internal-managed-account').digest('hex'),
   managedOwnerIdentity: 'kimi-claw:main',
+  managedTelegramOwnerDigest: createHash('sha256').update('7371893643').digest('hex'),
   modelProvider: 'kimi-coding',
   model: 'k2p6',
   recoveryEnabled: false
@@ -67,6 +68,35 @@ function runEvent(prompt, overrides = {}) {
     channelId: 'kimi-claw',
     senderId: 'owner-1',
     senderIsOwner: true,
+    ...overrides
+  };
+}
+
+function telegramContext(runId, overrides = {}) {
+  return {
+    runId,
+    agentId: CONFIG.managedAgentId,
+    messageProvider: 'telegram',
+    channel: 'telegram',
+    channelId: 'telegram',
+    chatId: '7371893643',
+    conversationId: '7371893643',
+    senderId: '7371893643',
+    sessionId: `session-${runId}`,
+    sessionKey: `agent:${CONFIG.managedAgentId}:main`,
+    trigger: 'user',
+    ...overrides
+  };
+}
+
+function telegramRunEvent(prompt, overrides = {}) {
+  return {
+    prompt,
+    messages: [],
+    channelId: 'telegram',
+    senderId: '7371893643',
+    senderIsOwner: true,
+    accountId: 'default',
     ...overrides
   };
 }
@@ -776,6 +806,86 @@ test('run-id fallback is unavailable outside the exact managed Kimi channel', as
   assertSafeOwnerShapeWarning(api.warnings[1]);
 });
 
+test('paired Telegram owner can use the exact run fallback when managed inbound hooks are absent', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    },
+    now: () => 1_000
+  }).register(api);
+
+  const result = await api.handlers.get('before_agent_run')(
+    telegramRunEvent('telegram owner objective'),
+    telegramContext('telegram-owner-fallback')
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(calls[0].operation, 'intake');
+  assert.deepEqual(calls[0].payload, {
+    channel: 'TELEGRAM',
+    externalMessageId: 'openclaw-run:telegram-owner-fallback',
+    conversationId: '7371893643',
+    sessionKey: `agent:${CONFIG.managedAgentId}:main`,
+    senderId: '7371893643',
+    claimOwner: 'openclaw-run:telegram-owner-fallback',
+    timestamp: 1_000,
+    text: 'telegram owner objective'
+  });
+});
+
+test('Telegram fallback rejects wrong, conflicting, unpaired, non-exact-provider, and wrong-session identities', async () => {
+  const variants = [
+    {
+      runId: 'wrong-owner',
+      event: telegramRunEvent('must not run', { senderId: '9999999999' }),
+      ctx: telegramContext('wrong-owner', { senderId: '9999999999' })
+    },
+    {
+      runId: 'conflicting-owner',
+      event: telegramRunEvent('must not run', { senderId: '7371893643' }),
+      ctx: telegramContext('conflicting-owner', { senderId: '9999999999' })
+    },
+    {
+      runId: 'unpaired-owner',
+      event: telegramRunEvent('must not run', { senderIsOwner: false }),
+      ctx: telegramContext('unpaired-owner')
+    },
+    {
+      runId: 'non-exact-provider',
+      event: telegramRunEvent('must not run', { channelId: 'telegram-proxy' }),
+      ctx: telegramContext('non-exact-provider', {
+        messageProvider: 'telegram-proxy',
+        channel: 'telegram-proxy',
+        channelId: 'telegram-proxy'
+      })
+    },
+    {
+      runId: 'wrong-session',
+      event: telegramRunEvent('must not run'),
+      ctx: telegramContext('wrong-session', { sessionKey: `agent:${CONFIG.managedAgentId}:other` })
+    }
+  ];
+
+  for (const variant of variants) {
+    const calls = [];
+    const api = fakeApi();
+    createManagedKimiPlugin({
+      gateway: async (...args) => {
+        calls.push(args);
+        return claim(variant.runId);
+      }
+    }).register(api);
+
+    const result = await api.handlers.get('before_agent_run')(variant.event, variant.ctx);
+    assert.equal(result.outcome, 'block', variant.runId);
+    assert.deepEqual(calls, [], variant.runId);
+    assert.equal(api.warnings[0], 'Brad managed intake blocked: managed_kimi_inbound_hooks_not_emitted');
+  }
+});
+
 test('conflicting inbound hook correlations fail closed before intake', async () => {
   const calls = [];
   const api = fakeApi();
@@ -1216,12 +1326,13 @@ test('Kimi, Telegram, and web inbound messages retain their source channel', asy
   }).register(api);
 
   await claimNormal(api, 'kimi-turn');
-  await claimNormal(
-    api,
-    'telegram-turn',
-    'telegram objective',
-    { channelId: 'telegram', senderId: 'telegram-owner' },
-    { messageProvider: 'telegram', channel: 'telegram' }
+  const telegramCtx = telegramContext('telegram-turn', {
+    messageId: 'provider-message-telegram-turn'
+  });
+  await api.handlers.get('inbound_claim')(inboundEvent(), telegramCtx);
+  await api.handlers.get('before_agent_run')(
+    telegramRunEvent('telegram objective'),
+    telegramCtx
   );
   await claimNormal(
     api,
@@ -1283,6 +1394,10 @@ test('registration rejects missing, malformed, unknown, or unsafe recovery confi
   assert.throws(
     () => plugin.register(fakeApi({ ...CONFIG, managedMainAccountDigest: 'not-a-digest' })),
     /valid pluginConfig.managedMainAccountDigest/
+  );
+  assert.throws(
+    () => plugin.register(fakeApi({ ...CONFIG, managedTelegramOwnerDigest: 'not-a-digest' })),
+    /valid pluginConfig.managedTelegramOwnerDigest/
   );
   assert.throws(
     () => plugin.register(fakeApi({ ...CONFIG, recoveryEnabled: 'yes' })),
