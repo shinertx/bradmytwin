@@ -100,7 +100,8 @@ Automated Linear dispatch requires an issue in `In Progress` with both `Hermes` 
 ## Multi-agent rollout
 
 1. Set `BRAD_CONDUCTOR_MODE=shadow` on API and worker.
-2. Apply migrations `005`, `006`, and `009`; build and restart.
+2. Apply migrations `005`, `006`, and `010`; build and restart.
+   For the current GCP staging cutover, install the reviewed drop-ins under `infra/systemd/` so API, Web, and Worker use the isolated staging checkout and the same Node 24 runtime as OpenClaw. Keep the protected live `.env` as the single secret source; do not copy it into Git.
 3. Verify ordinary Telegram and web responses still occur exactly once.
 4. Confirm Redis Stream `brad:agent:jobs` receives one wakeup for a new outbox record and that a duplicate wakeup cannot re-run a settled job.
 5. Start `@brad/buzz-bridge` on the Mac through the existing API tunnel. Keep its token outside Git and its Buzz private key in the existing protected key file.
