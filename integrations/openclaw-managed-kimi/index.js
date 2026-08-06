@@ -572,7 +572,7 @@ export function createManagedKimiPlugin(options = {}) {
         const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
         if (sessionKey !== managedMainSessionKey) return null;
         if (event?.senderIsOwner !== false) return null;
-        if (normalizedString(event?.accountId).toLowerCase() !== configuredOwnerPrincipal) return null;
+        if (!normalizedString(event?.accountId)) return null;
         if (normalizedString(event?.senderId) || normalizedString(ctx?.senderId)) return null;
         const digest = promptDigest(event?.prompt);
         if (!digest) return null;

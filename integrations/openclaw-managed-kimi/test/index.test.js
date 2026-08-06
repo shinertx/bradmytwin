@@ -443,7 +443,7 @@ test('managed Kimi main continuation joins the exact authenticated boot claim on
   const mainEvent = runEvent(prompt, {
     channelId: undefined,
     senderId: undefined,
-    accountId: 'main',
+    accountId: 'internal-managed-account',
     senderIsOwner: false
   });
   assert.equal(await api.handlers.get('before_agent_run')(mainEvent, mainCtx), undefined);
@@ -483,7 +483,7 @@ test('managed Kimi main continuation joins the exact authenticated boot claim on
   );
 });
 
-test('managed Kimi continuation rejects prompt, account, and time-window mismatches', async () => {
+test('managed Kimi continuation rejects prompt, missing-account, and time-window mismatches', async () => {
   let currentTime = 1_000;
   const calls = [];
   const api = fakeApi();
@@ -529,7 +529,7 @@ test('managed Kimi continuation rejects prompt, account, and time-window mismatc
     })
   );
   assert.equal((await continuation('wrong-prompt', 'different objective', 'main')).outcome, 'block');
-  assert.equal((await continuation('wrong-account', 'exact objective', 'other')).outcome, 'block');
+  assert.equal((await continuation('missing-account', 'exact objective', undefined)).outcome, 'block');
   currentTime = 31_001;
   assert.equal((await continuation('stale', 'exact objective', 'main')).outcome, 'block');
   assert.equal(calls.filter((call) => call.operation === 'intake').length, 1);
