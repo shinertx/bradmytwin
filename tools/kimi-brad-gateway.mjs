@@ -6,6 +6,7 @@ import {
   authorityViolation,
   buildFirstPrinciplesBrief,
   defaultAuthorityEnvelope,
+  inferVerificationContract,
   redactSensitiveText
 } from '@brad/domain';
 import dotenv from 'dotenv';
@@ -244,6 +245,7 @@ async function intake(pool, encoded) {
     const jobId = randomUUID();
     const databaseChannel = channel === 'TELEGRAM' ? 'TELEGRAM' : 'WEB';
     const brief = buildFirstPrinciplesBrief(text);
+    const verificationContract = inferVerificationContract(text);
     const authority = defaultAuthorityEnvelope();
     const objectiveKey = `managed-kimi:${inboundId}`;
 
@@ -340,7 +342,13 @@ async function intake(pool, encoded) {
       sender: 'system', recipients: ['brad-kimi'], type: 'FIRST_PRINCIPLES', body: briefBody
     });
 
-    const request = { stage: 'EXECUTIVE_INTAKE', objective: brief.objective, brief, authority };
+    const request = {
+      stage: 'EXECUTIVE_INTAKE',
+      objective: brief.objective,
+      brief,
+      authority,
+      ...(verificationContract ? { verificationContract } : {})
+    };
     await client.query(
       `INSERT INTO brad_agent_jobs (
          id, person_id, thread_id, trigger_message_id, assigned_agent_id, status,

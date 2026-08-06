@@ -2,6 +2,7 @@ import {
   AGENT_IDS,
   buildFirstPrinciplesBrief,
   defaultAuthorityEnvelope,
+  inferVerificationContract,
   nextAgentForTurn,
   redactSensitiveText,
   type AgentMessageType,
@@ -89,6 +90,7 @@ export class AgentConductorService {
     try {
       await client.query('BEGIN');
       const brief = buildFirstPrinciplesBrief(input.text);
+      const verificationContract = inferVerificationContract(input.text);
       const objectiveKey = `message:${input.sourceMessageId}`;
       const objectiveId = randomUUID();
       const objectiveResult = await client.query<{ id: string }>(
@@ -183,7 +185,13 @@ export class AgentConductorService {
           threadId,
           triggerMessageId: ownerMessage.id,
           assignedAgentId: AGENT_IDS.BRAD_KIMI,
-          request: { stage: 'EXECUTIVE_INTAKE', objective: brief.objective, brief, authority },
+          request: {
+            stage: 'EXECUTIVE_INTAKE',
+            objective: brief.objective,
+            brief,
+            authority,
+            ...(verificationContract ? { verificationContract } : {})
+          },
           idempotencyKey: `job:executive:${input.sourceMessageId}`
         });
       }

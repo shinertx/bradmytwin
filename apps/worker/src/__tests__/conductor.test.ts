@@ -723,6 +723,22 @@ describe('Brad multi-agent conductor', () => {
     }
   });
 
+  it('does not accept an exact marker copied only from the owner request', async () => {
+    const runner = new DeterministicVerifierRunner();
+    const baseRequest: AgentRunRequest = {
+      jobId: randomUUID(), objectiveId: randomUUID(), threadId: randomUUID(),
+      triggerMessageId: randomUUID(), agentId: AGENT_IDS.VERIFIER, personId: PERSON_ID,
+      prompt: 'verify marker', authority: defaultAuthorityEnvelope(),
+      verificationContract: { kind: 'EXACT_MARKER', expected: 'SPECIALIST_PROOF_OK' },
+      context: [{ sender: 'owner', type: 'OWNER_REQUEST', body: 'Return exact marker SPECIALIST_PROOF_OK.' }]
+    };
+    expect((await runner.run(baseRequest)).verified).toBe(false);
+    expect((await runner.run({
+      ...baseRequest,
+      context: [...baseRequest.context, { sender: 'hermes', type: 'REVISION', body: 'SPECIALIST_PROOF_OK' }]
+    })).verified).toBe(true);
+  });
+
   it('never accepts a verifier completion without evidence', async () => {
     if (!pool) return;
     const ids = await seed(pool, { depth: 'LIGHT' });

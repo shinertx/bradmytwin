@@ -171,7 +171,10 @@ export class DeterministicVerifierRunner implements AgentRunner {
     const contract = request.verificationContract ?? {};
     const kind = typeof contract.kind === 'string' ? contract.kind : '';
     const expected = typeof contract.expected === 'string' ? contract.expected : '';
-    const combined = request.context.map((message) => message.body).join('\n');
+    const combined = request.context
+      .filter((message) => message.sender === AGENT_IDS.HERMES)
+      .map((message) => message.body)
+      .join('\n');
 
     if (kind === 'EXACT_MARKER' && expected && combined.includes(expected)) {
       return {

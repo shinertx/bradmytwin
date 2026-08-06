@@ -4,6 +4,7 @@ import {
   buildFirstPrinciplesBrief,
   classifyReasoningDepth,
   defaultAuthorityEnvelope,
+  inferVerificationContract,
   AGENT_IDS,
   nextAgentForTurn,
   redactSensitiveText,
@@ -15,6 +16,12 @@ describe('agent operating policy', () => {
     const brief = buildFirstPrinciplesBrief('check whether Brad is healthy');
     expect(brief.objective).toBe('check whether Brad is healthy');
     expect(brief.decisiveTest).toContain('source of truth');
+  });
+
+  it('infers only an explicitly requested exact-marker verification contract', () => {
+    expect(inferVerificationContract('Return the exact marker MULTI_AGENT_CANARY_OK after verification.'))
+      .toEqual({ kind: 'EXACT_MARKER', expected: 'MULTI_AGENT_CANARY_OK' });
+    expect(inferVerificationContract('Check whether the service is healthy.')).toBeUndefined();
   });
 
   it('uses full depth for consequential work', () => {

@@ -65,6 +65,11 @@ export interface AgentTurnBudget {
   maxCostMicros: number;
 }
 
+export interface VerificationContract {
+  kind: 'EXACT_MARKER';
+  expected: string;
+}
+
 const SUBSTANTIVE_PATTERNS = [
   /\b(strategy|architecture|legal|financial|deploy|delete|publish|purchase|security|credential)\b/i,
   /\b(compare|investigate|root cause|first principles|red[- ]?team|audit|design|build)\b/i,
@@ -106,6 +111,12 @@ export function buildFirstPrinciplesBrief(text: string): FirstPrinciplesBrief {
     decisiveTest: 'Run the cheapest source-of-truth test with an explicit threshold and resulting decision.',
     depth
   };
+}
+
+export function inferVerificationContract(text: string): VerificationContract | undefined {
+  const match = text.match(/\bexact\s+marker\s+[`"']?([A-Z][A-Z0-9_-]{5,127})[`"']?/i);
+  if (!match) return undefined;
+  return { kind: 'EXACT_MARKER', expected: match[1] };
 }
 
 export function turnBudgetFailure(budget: AgentTurnBudget): 'LOOP_BUDGET_EXHAUSTED' | 'TIME_BUDGET_EXHAUSTED' | 'COST_BUDGET_EXHAUSTED' | null {
