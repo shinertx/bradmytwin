@@ -99,6 +99,34 @@ async function claimNormal(api, runId, prompt = `objective ${runId}`, inboundOve
   return { ctx, result };
 }
 
+async function claimFromMessageReceived(
+  api,
+  runId,
+  prompt = `objective ${runId}`,
+  eventOverrides = {},
+  ctxOverrides = {}
+) {
+  const ctx = kimiContext(runId, { senderId: undefined, ...ctxOverrides });
+  await api.handlers.get('message_received')({
+    from: 'main',
+    content: prompt,
+    messageId: `provider-message-${runId}`,
+    sessionKey: ctx.sessionKey,
+    runId,
+    ...eventOverrides
+  }, ctx);
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent(prompt, {
+      accountId: 'main',
+      senderId: undefined,
+      senderIsOwner: undefined,
+      ...eventOverrides
+    }),
+    ctx
+  );
+  return { ctx, result };
+}
+
 async function flushPromises() {
   await new Promise((resolve) => setImmediate(resolve));
 }
@@ -291,6 +319,50 @@ test('managed Kimi account identity joins the live hook shape when sender fields
   assert.equal(result, undefined);
   assert.equal(calls[0].operation, 'intake');
   assert.equal(calls[0].payload.senderId, 'main');
+});
+
+test('message_received provides durable provider correlation when Kimi omits inbound_claim', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+
+  const { result } = await claimFromMessageReceived(api, 'message-received-fallback');
+
+  assert.equal(result, undefined);
+  assert.equal(calls[0].operation, 'intake');
+  assert.equal(calls[0].payload.externalMessageId, 'provider-message-message-received-fallback');
+  assert.equal(calls[0].payload.senderId, 'main');
+  assert.equal(calls[0].payload.channel, 'KIMI');
+});
+
+test('conflicting inbound hook correlations fail closed before intake', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({ gateway: async (...args) => { calls.push(args); return claim('unsafe'); } }).register(api);
+  const ctx = kimiContext('correlation-conflict');
+  await api.handlers.get('message_received')({
+    from: 'main',
+    content: 'objective',
+    messageId: 'provider-message-a',
+    sessionKey: ctx.sessionKey,
+    runId: 'correlation-conflict'
+  }, ctx);
+  await api.handlers.get('inbound_claim')(
+    inboundEvent({ messageId: 'provider-message-b' }),
+    ctx
+  );
+  const result = await api.handlers.get('before_agent_run')(runEvent('must not run'), ctx);
+
+  assert.equal(result.outcome, 'block');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(api.warnings, [
+    'Brad managed intake blocked: managed_kimi_inbound_correlation_conflict'
+  ]);
 });
 
 test('unknown or non-owner execution signals fail closed before intake', async () => {

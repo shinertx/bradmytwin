@@ -372,6 +372,7 @@ export function createManagedKimiPlugin(options = {}) {
       const claimNormalRun = async (event, ctx, runId) => {
         const inbound = inboundStates.get(runId);
         if (!inbound) throw new Error('managed_kimi_owner_proof_required');
+        if (inbound.correlationConflict) throw new Error('managed_kimi_inbound_correlation_conflict');
         const providers = boundedContextValues(
           [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel, inbound.provider],
           128
@@ -390,8 +391,11 @@ export function createManagedKimiPlugin(options = {}) {
           principals
         );
         const senderId = managedPrincipal || principals[0] || '';
+        const channel = inbound.correlationSource === 'message_received' && inbound.channel === 'WEB'
+          ? sourceChannel(event, ctx)
+          : inbound.channel;
         const ownerVerified = event?.senderIsOwner === true
-          || (inbound.channel === 'KIMI' && Boolean(managedPrincipal));
+          || (channel === 'KIMI' && Boolean(managedPrincipal));
         if (!ownerVerified) {
           throw new Error(ownerProofFailure(config.managedOwnerIdentity, providers, principals));
         }
@@ -402,7 +406,7 @@ export function createManagedKimiPlugin(options = {}) {
         if (!text) throw new Error('managed_kimi_prompt_required');
         const claimOwner = `openclaw-run:${runId}`;
         const result = await callGateway('intake', {
-          channel: inbound.channel,
+          channel,
           externalMessageId: inbound.externalMessageId,
           conversationId: inbound.conversationId,
           sessionKey: inbound.sessionKey,
@@ -549,7 +553,7 @@ export function createManagedKimiPlugin(options = {}) {
         }
       };
 
-      api.on('inbound_claim', async (event, ctx) => {
+      const rememberInbound = (event, ctx, correlationSource) => {
         pruneStates();
         const runId = runIdFrom(event, ctx);
         if (!runId) return;
@@ -574,17 +578,43 @@ export function createManagedKimiPlugin(options = {}) {
           accountId,
           provider,
           channel: sourceChannel(event, ctx),
+          correlationSource,
           createdAt: now()
         };
         const existing = inboundStates.get(runId);
-        if (
-          existing
-          && (existing.externalMessageId !== next.externalMessageId || existing.sessionKey !== next.sessionKey)
-        ) {
+        if (!existing) {
           inboundStates.set(runId, next);
           return;
         }
-        inboundStates.set(runId, next);
+        const externalMessageConflict = existing.externalMessageId
+          && next.externalMessageId
+          && existing.externalMessageId !== next.externalMessageId;
+        const sessionConflict = existing.sessionKey
+          && next.sessionKey
+          && existing.sessionKey !== next.sessionKey;
+        inboundStates.set(runId, {
+          externalMessageId: existing.externalMessageId || next.externalMessageId,
+          sessionKey: existing.sessionKey || next.sessionKey,
+          conversationId: existing.conversationId || next.conversationId,
+          senderId: existing.senderId || next.senderId,
+          accountId: existing.accountId || next.accountId,
+          provider: existing.provider || next.provider,
+          channel: existing.channel !== 'WEB' ? existing.channel : next.channel,
+          correlationSource: existing.correlationSource === 'inbound_claim'
+            || next.correlationSource === 'inbound_claim'
+            ? 'inbound_claim'
+            : 'message_received',
+          correlationConflict: existing.correlationConflict || externalMessageConflict || sessionConflict,
+          createdAt: Math.min(existing.createdAt, next.createdAt)
+        });
+      };
+
+      api.on('inbound_claim', async (event, ctx) => {
+        rememberInbound(event, ctx, 'inbound_claim');
+      }, { priority: 100 });
+
+      api.on('message_received', async (event, ctx) => {
+        rememberInbound(event, ctx, 'message_received');
       }, { priority: 100 });
 
       api.on('before_model_resolve', async (event, ctx) => {
