@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+exec /home/benjijmac/.local/node-v24.18.0-linux-x64/bin/node \
+  /home/benjijmac/.npm-global/lib/node_modules/openclaw/openclaw.mjs "$@"

@@ -24,6 +24,38 @@ export function createAgentRedis(url: string): Redis {
   return redis;
 }
 
+const PUBLISH_ONCE_LUA = `
+local prior = redis.call('GET', KEYS[2])
+if prior then
+  return prior
+end
+local streamId = redis.call(
+  'XADD', KEYS[1], '*',
+  'outbox_id', ARGV[1],
+  'thread_id', ARGV[2],
+  'event_type', ARGV[3],
+  'payload', ARGV[4]
+)
+redis.call('SET', KEYS[2], streamId)
+return streamId
+`;
+
+async function publishAgentEventOnce(redis: Redis, streamKey: string, row: RedisOutboxRow): Promise<string> {
+  const markerKey = `${streamKey}:published:${row.id}`;
+  const streamId = await redis.eval(
+    PUBLISH_ONCE_LUA,
+    2,
+    streamKey,
+    markerKey,
+    row.id,
+    row.thread_id,
+    row.event_type,
+    JSON.stringify(row.payload_json)
+  );
+  if (typeof streamId !== 'string' || !streamId) throw new Error('redis_xadd_missing_stream_id');
+  return streamId;
+}
+
 export async function publishPendingAgentEvents(
   pool: Pool,
   redis: Redis,
@@ -59,15 +91,7 @@ export async function publishPendingAgentEvents(
   let published = 0;
   for (const row of rows) {
     try {
-      const streamId = await redis.xadd(
-        streamKey,
-        'MAXLEN', '~', '10000', '*',
-        'outbox_id', row.id,
-        'thread_id', row.thread_id,
-        'event_type', row.event_type,
-        'payload', JSON.stringify(row.payload_json)
-      );
-      if (!streamId) throw new Error('redis_xadd_missing_stream_id');
+      const streamId = await publishAgentEventOnce(redis, streamKey, row);
       const updated = await pool.query(
         `UPDATE brad_agent_outbox
          SET status = 'PUBLISHED', external_event_id = $2, published_at = now(), updated_at = now()

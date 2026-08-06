@@ -106,6 +106,8 @@ Automated Linear dispatch requires an issue in `In Progress` with both `Hermes` 
 4. Confirm Redis Stream `brad:agent:jobs` receives one wakeup for a new outbox record and that a duplicate wakeup cannot re-run a settled job.
 5. Start `@brad/buzz-bridge` on the Mac through the existing API tunnel. Keep its token outside Git and its Buzz private key in the existing protected key file.
 6. Link Kimi to this existing OpenClaw runtime through `kimi.com/bot`; back up the OpenClaw config first and retain the current model profile as rollback.
+   Install `integrations/openclaw-managed-kimi` only on OpenClaw `2026.7.1-2` or newer. The plugin entry must explicitly set `hooks.allowConversationAccess=true` and `hooks.allowPromptInjection=true`; OpenClaw otherwise refuses the non-bundled conversation hooks. Set `config.recoveryEnabled=false` in isolated staging and `true` only on the promoted single runtime.
+   Install `infra/openclaw/openclaw-node24-wrapper` as `/usr/local/bin/openclaw` so operator commands use the same Node 24 binary as the healthy service. Verify the resolved command and version before changing any runtime state.
 7. Run the runtime, conversation, restart, loop, safety, reconciliation, and two-person isolation canaries.
 8. Set `BRAD_CONDUCTOR_MODE=active` only after the documented promotion threshold passes.
 

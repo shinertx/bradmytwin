@@ -337,6 +337,26 @@ export async function processOneAgentJob(
   }
   clearInterval(leaseHeartbeat);
 
+  const resultScopeViolation = authorityViolation(
+    JSON.stringify({
+      text: result.text,
+      artifactRefs: result.artifactRefs,
+      evidenceRefs: result.evidenceRefs,
+      blockerCode: result.blockerCode
+    }),
+    thread.authority_json
+  );
+  if (resultScopeViolation) {
+    await blockJob(
+      pool,
+      job,
+      thread,
+      resultScopeViolation,
+      'An agent result attempted to introduce content outside this personal Brad objective.'
+    );
+    return true;
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -364,6 +384,9 @@ export async function processOneAgentJob(
       return true;
     }
     if (result.deferred) {
+      const deferredToManagedKimi = result.blockerCode === 'WAITING_MANAGED_KIMI_REPLY';
+      const blockerCode = result.blockerCode ?? 'WAITING_BUZZ_AGENT_REPLY';
+      const phase = deferredToManagedKimi ? 'WAITING_MANAGED_KIMI' : 'WAITING_BUZZ_REPLY';
       await insertMessage(client, {
         jobId: job.id,
         thread,
@@ -371,17 +394,22 @@ export async function processOneAgentJob(
         recipients: [job.assigned_agent_id],
         type: 'DELEGATE',
         body: `${prompt}\n\n[BRAD_THREAD:${thread.id}][BRAD_JOB:${job.id}]`,
-        metadata: { deferredToBuzz: true, jobId: job.id }
+        metadata: {
+          deferredAdapter: deferredToManagedKimi ? 'managed-kimi' : 'buzz',
+          jobId: job.id
+        }
       });
       await client.query(
-        `UPDATE brad_agent_jobs SET status = 'WAITING', last_error = $2, leased_until = NULL, updated_at = now()
+        `UPDATE brad_agent_jobs
+         SET status = 'WAITING', last_error = $2, leased_until = NULL,
+             lease_token = NULL, worker_identity = NULL, updated_at = now()
          WHERE id = $1`,
-        [job.id, result.blockerCode ?? 'WAITING_BUZZ_AGENT_REPLY']
+        [job.id, blockerCode]
       );
       await client.query(
-        `UPDATE brad_agent_threads SET status = 'WAITING', blocker_code = $2, phase = 'WAITING_BUZZ_REPLY', updated_at = now()
+        `UPDATE brad_agent_threads SET status = 'WAITING', blocker_code = $2, phase = $3, updated_at = now()
          WHERE id = $1`,
-        [thread.id, result.blockerCode ?? 'WAITING_BUZZ_AGENT_REPLY']
+        [thread.id, blockerCode, phase]
       );
       await client.query('COMMIT');
       return true;

@@ -58,3 +58,29 @@ Rollback is one configuration change: restore `BRAD_CONDUCTOR_MODE=shadow` and r
 - Back up `openclaw.json` before the plugin install and retain the current model as rollback.
 - Confirm the linked runtime reports the intended Kimi model before changing the worker model profile.
 - Buzz Desktop `0.5.5` is the promotion target. Preserve the existing identity and prove relay readiness plus a signed message before and after the upgrade.
+
+## Managed Kimi Bridge Contract
+
+The non-bundled `brad-managed-kimi` plugin must be loaded only on OpenClaw `2026.7.1-2` or newer with this policy shape:
+
+```json
+{
+  "enabled": true,
+  "hooks": {
+    "allowConversationAccess": true,
+    "allowPromptInjection": true
+  },
+  "config": {
+    "managedAgentId": "main",
+    "modelProvider": "kimi-coding",
+    "model": "k2p6",
+    "recoveryEnabled": false
+  }
+}
+```
+
+Use `recoveryEnabled: false` in isolated staging. Change it to `true` only on the single promoted managed runtime after staging proves that it cannot claim production work or consume Telegram.
+
+The bridge uses the provider message ID for durable deduplication, requires an explicit trusted-owner signal, settles the executive response in Postgres before final delivery, blocks all unclaimed tools, renews live claims, and reschedules expired work into the original OpenClaw session. The recovery claim token stays in plugin memory and is rotated to the exact resumed run before model execution.
+
+The verified managed provider/model identity is `kimi-coding/k2p6`. Do not relabel that runtime as `moonshot/kimi-k3` without a fresh runtime canary that reports that exact provider and model.

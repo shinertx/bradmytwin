@@ -2,6 +2,12 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
+import {
+  authorityViolation,
+  buildFirstPrinciplesBrief,
+  defaultAuthorityEnvelope,
+  redactSensitiveText
+} from '@brad/domain';
 import dotenv from 'dotenv';
 import pg from 'pg';
 
@@ -12,8 +18,10 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const ARTIFACT_ROOT = process.env.BRAD_ARTIFACT_ROOT ?? '/home/benjijmac/server-audits/brad-hermes-jobs/';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACTIONS = new Set(['DISPATCH_HERMES', 'WAIT', 'REQUEST_APPROVAL']);
-const MANAGED_CHANNELS = new Set(['KIMI', 'TELEGRAM']);
-const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED']);
+const MANAGED_CHANNELS = new Set(['KIMI', 'TELEGRAM', 'WEB']);
+const SENSITIVE_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|bot[_-]?token|token|secret|password|passwd|pwd|private[_-]?key|credential)/i;
+// A two-minute recovery scan must be able to reclaim and resume within five minutes.
+const CLAIM_TTL_SECONDS = 150;
 
 function emit(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -54,62 +62,14 @@ function encodeBody(value) {
   return JSON.stringify(value);
 }
 
-function redactSensitiveText(value) {
-  return value
-    .replace(/-----BEGIN [^-\n]+ PRIVATE KEY-----[\s\S]*?-----END [^-\n]+ PRIVATE KEY-----/g, '[REDACTED]')
-    .replace(/\b(?:sk|rk|pk)-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g, '[REDACTED]')
-    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '[REDACTED]')
-    .replace(/\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/g, '[REDACTED]')
-    .replace(/\b((?:api[_-]?key|access[_-]?token|refresh[_-]?token|bot[_-]?token|token|secret|password|passwd|pwd)\s*[:=]\s*)["']?[^\s"',;]+["']?/gi, '$1[REDACTED]');
-}
-
-function redactValue(value) {
+function redactValue(value, key = '') {
+  if (SENSITIVE_KEY_PATTERN.test(key)) return '[REDACTED]';
   if (typeof value === 'string') return redactSensitiveText(value);
-  if (Array.isArray(value)) return value.map(redactValue);
+  if (Array.isArray(value)) return value.map((child) => redactValue(child));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactValue(child)]));
+    return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, redactValue(child, childKey)]));
   }
   return value;
-}
-
-function classifyReasoningDepth(text) {
-  return text.length >= 240 || /\b(strategy|architecture|legal|financial|deploy|delete|publish|purchase|security|credential|compare|investigate|root cause|first principles|red[- ]?team|audit|design|build|send|spend|file|sign|trade|transfer|approve)\b/i.test(text)
-    ? 'FULL'
-    : 'LIGHT';
-}
-
-function firstPrinciplesBrief(text) {
-  const objective = text.trim().replace(/^\/do\b\s*/i, '').trim() || 'Resolve the owner request.';
-  const depth = classifyReasoningDepth(objective);
-  if (depth === 'LIGHT') return {
-    objective,
-    bindingConstraint: 'The result must be produced and checked without creating an unauthorized effect.',
-    hiddenAssumption: 'The request contains enough context to choose a reversible next action.',
-    candidate: 'Take the smallest proof-bearing action that advances the objective.',
-    strongestAttack: 'The action may only create activity rather than prove the requested outcome.',
-    repair: 'Require a concrete artifact, source-of-truth observation, or precise blocker.',
-    decisiveTest: 'Check the requested outcome against its source of truth before closing.',
-    depth
-  };
-  return {
-    objective,
-    bindingConstraint: 'Identify and remove the constraint that prevents a verified outcome.',
-    hiddenAssumption: 'The apparent task is the highest-value interpretation within the owner\'s stated scope and authority.',
-    candidate: 'Form the strongest reversible solution using current evidence and available capabilities.',
-    strongestAttack: 'Assume the candidate is wrong, incomplete, unsafe, duplicated, or optimized for activity instead of outcome.',
-    repair: 'Revise the candidate until the strongest remaining objection no longer changes the recommended action.',
-    decisiveTest: 'Run the cheapest source-of-truth test with an explicit threshold and resulting decision.',
-    depth
-  };
-}
-
-function defaultAuthorityEnvelope() {
-  return {
-    level: 'APPROVAL_REQUIRED',
-    externalEffectsAllowed: false,
-    allowedTools: [],
-    forbiddenScopes: ['JENNI', 'CREDENTIALS', 'LEGAL_FILING', 'PAYMENTS', 'DELETION', 'PUBLICATION']
-  };
 }
 
 function validateArray(value, name, maxItems = 32) {
@@ -163,7 +123,18 @@ async function health(pool) {
   emit({ ok: true, operation: 'health', ...result.rows[0] });
 }
 
-async function managedPersonId(client) {
+function assertNoForbiddenScope(values, authority = defaultAuthorityEnvelope()) {
+  const violation = authorityViolation(values.map((value) => encodeBody(value)).join('\n'), authority);
+  if (violation) throw new Error(violation.toLowerCase());
+}
+
+function requestContentForScope(request) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
+  const { authority: _policyMetadata, ...content } = request;
+  return content;
+}
+
+async function managedBinding(client) {
   const result = await client.query(
     `SELECT DISTINCT person_id
      FROM brad_kimi_assignments
@@ -171,7 +142,13 @@ async function managedPersonId(client) {
      ORDER BY person_id`
   );
   if (result.rows.length !== 1) throw new Error('managed_kimi_person_binding_ambiguous');
-  return result.rows[0].person_id;
+  return { personId: result.rows[0].person_id };
+}
+
+function validateManagedClaimPayload(payload) {
+  const claimOwner = validateText(payload.claimOwner, 'claim_owner', 256);
+  if (!/^[A-Za-z0-9:._-]+$/.test(claimOwner)) throw new Error('invalid_claim_owner');
+  return claimOwner;
 }
 
 async function intake(pool, encoded) {
@@ -179,35 +156,84 @@ async function intake(pool, encoded) {
   const channel = validateText(payload.channel, 'channel', 20);
   const externalMessageId = validateText(payload.externalMessageId, 'external_message_id', 256);
   const conversationId = validateText(payload.conversationId, 'conversation_id', 512);
+  const sessionKey = validateText(payload.sessionKey, 'session_key', 512);
   const senderId = validateText(payload.senderId, 'sender_id', 256, false);
+  const claimOwner = validateManagedClaimPayload(payload);
   const text = validateText(payload.text, 'text', 100000);
   if (!MANAGED_CHANNELS.has(channel)) throw new Error('invalid_channel');
-  if (/\bjenni(?:pro)?\b/i.test(text)) throw new Error('forbidden_scope_jenni');
+  assertNoForbiddenScope([channel, conversationId, senderId, text]);
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const { personId } = await managedBinding(client);
+    const contentDigest = digest(text);
+    const identityKey = `${personId}:${channel}:${conversationId}:${externalMessageId}`;
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [identityKey]);
     const existing = await client.query(
-      `SELECT objective_id, thread_id, executive_job_id
-       FROM brad_managed_kimi_inbound
-       WHERE channel = $1 AND external_message_id = $2
-       FOR UPDATE`,
-      [channel, externalMessageId]
+      `SELECT b.id, b.objective_id, b.thread_id, b.executive_job_id, b.content_digest,
+              b.status, b.claim_token, b.claim_owner, b.claim_expires_at,
+              b.response_digest, b.settled_at, b.delivery_status,
+              b.delivery_message_id, b.delivered_at, j.status AS executive_job_status
+       FROM brad_managed_kimi_inbound b
+       JOIN brad_agent_jobs j ON j.id = b.executive_job_id AND j.person_id = b.person_id
+       WHERE b.person_id = $1 AND b.channel = $2 AND b.conversation_id = $3 AND b.external_message_id = $4
+       FOR UPDATE OF b, j`,
+      [personId, channel, conversationId, externalMessageId]
     );
     if (existing.rows[0]) {
+      const inbound = existing.rows[0];
+      if (inbound.content_digest !== contentDigest) throw new Error('managed_kimi_inbound_digest_conflict');
+      if (inbound.status === 'RECONCILE_REQUIRED') throw new Error('managed_kimi_reconcile_required');
+      if (inbound.status === 'SETTLED') {
+        if (!inbound.response_digest || !inbound.settled_at || inbound.executive_job_status !== 'SUCCEEDED') {
+          throw new Error('managed_kimi_settlement_invalid');
+        }
+        await client.query('COMMIT');
+        emit({
+          ok: true,
+          operation: 'intake',
+          deduplicated: true,
+          settled: true,
+          deliveryStatus: inbound.delivery_status,
+          inboundId: inbound.id,
+          objectiveId: inbound.objective_id,
+          threadId: inbound.thread_id,
+          jobId: inbound.executive_job_id
+        });
+        return;
+      }
+      const claimIsLive = inbound.status === 'CLAIMED'
+        && inbound.claim_expires_at
+        && new Date(inbound.claim_expires_at).getTime() > Date.now();
+      if (claimIsLive && inbound.claim_owner !== claimOwner) throw new Error('managed_kimi_inbound_busy');
+      const claimToken = claimIsLive ? inbound.claim_token : randomUUID();
+      if (!claimIsLive) {
+        await client.query(
+          `UPDATE brad_managed_kimi_inbound
+           SET status = 'CLAIMED', claim_token = $2, claim_owner = $3,
+               claim_expires_at = now() + ($4 || ' seconds')::interval, updated_at = now()
+           WHERE id = $1`,
+          [inbound.id, claimToken, claimOwner, String(CLAIM_TTL_SECONDS)]
+        );
+      }
       await client.query('COMMIT');
       emit({
         ok: true,
         operation: 'intake',
         deduplicated: true,
-        objectiveId: existing.rows[0].objective_id,
-        threadId: existing.rows[0].thread_id,
-        jobId: existing.rows[0].executive_job_id
+        settled: false,
+        inboundId: inbound.id,
+        objectiveId: inbound.objective_id,
+        threadId: inbound.thread_id,
+        jobId: inbound.executive_job_id,
+        claimToken
       });
       return;
     }
 
-    const personId = await managedPersonId(client);
+    const inboundId = randomUUID();
+    const claimToken = randomUUID();
     const baseThreadId = randomUUID();
     const sourceMessageId = randomUUID();
     const objectiveId = randomUUID();
@@ -216,9 +242,9 @@ async function intake(pool, encoded) {
     const briefMessageId = randomUUID();
     const jobId = randomUUID();
     const databaseChannel = channel === 'TELEGRAM' ? 'TELEGRAM' : 'WEB';
-    const brief = firstPrinciplesBrief(text);
+    const brief = buildFirstPrinciplesBrief(text);
     const authority = defaultAuthorityEnvelope();
-    const objectiveKey = `managed-kimi:${channel}:${externalMessageId}`;
+    const objectiveKey = `managed-kimi:${inboundId}`;
 
     await client.query(
       `INSERT INTO threads (id, person_id, primary_channel, status)
@@ -248,7 +274,7 @@ async function intake(pool, encoded) {
         objectiveId,
         personId,
         sourceMessageId,
-        `managed-kimi:${conversationId}`,
+        sessionKey,
         brief.objective,
         'The requested outcome is independently verified, or a precise blocker is recorded.',
         brief.decisiveTest,
@@ -260,7 +286,7 @@ async function intake(pool, encoded) {
          id, person_id, objective_id, source_message_id, status, reasoning_depth,
          phase, lead_agent_id, next_agent_id, current_assignment, authority_json,
          max_consecutive_agent_turns, max_cost_micros
-       ) VALUES ($1,$2,$3,$4,'QUEUED',$5,'INTAKE','brad-kimi','brad-kimi',$6,$7::jsonb,8,5000000)`,
+       ) VALUES ($1,$2,$3,$4,'WAITING',$5,'WAITING_MANAGED_KIMI','brad-kimi','brad-kimi',$6,$7::jsonb,8,5000000)`,
       [threadId, personId, objectiveId, sourceMessageId, brief.depth, brief.objective, encodeBody(authority)]
     );
     await client.query(
@@ -282,7 +308,7 @@ async function intake(pool, encoded) {
         text,
         encodeBody({ sourceChannel: channel, conversationId }),
         digest({ sender: 'owner', type: 'OWNER_REQUEST', body: text }),
-        `owner:${externalMessageId}`
+        `owner:${inboundId}`
       ]
     );
     await insertAgentOutbox(client, {
@@ -305,7 +331,7 @@ async function intake(pool, encoded) {
         briefBody,
         encodeBody({ brief }),
         digest({ sender: 'system', type: 'FIRST_PRINCIPLES', body: briefBody }),
-        `first-principles:${externalMessageId}`
+        `first-principles:${inboundId}`
       ]
     );
     await insertAgentOutbox(client, {
@@ -318,25 +344,38 @@ async function intake(pool, encoded) {
       `INSERT INTO brad_agent_jobs (
          id, person_id, thread_id, trigger_message_id, assigned_agent_id, status,
          request_json, request_digest, idempotency_key
-       ) VALUES ($1,$2,$3,$4,'brad-kimi','QUEUED',$5::jsonb,$6,$7)`,
-      [jobId, personId, threadId, ownerMessageId, encodeBody(request), payloadDigest(request), `job:executive:${externalMessageId}`]
+       ) VALUES ($1,$2,$3,$4,'brad-kimi','WAITING',$5::jsonb,$6,$7)`,
+      [jobId, personId, threadId, ownerMessageId, encodeBody(request), payloadDigest(request), `job:executive:${inboundId}`]
     );
     await client.query(
-      `INSERT INTO brad_agent_outbox (
-         person_id, thread_id, destination, event_type, payload_json, idempotency_key
-       ) VALUES ($1,$2,'REDIS','AGENT_JOB_QUEUED',$3::jsonb,$4)
-       ON CONFLICT (destination, idempotency_key) DO NOTHING`,
-      [personId, threadId, encodeBody({ threadId }), `redis:job:executive:${externalMessageId}`]
+      `UPDATE brad_agent_jobs SET last_error = 'WAITING_MANAGED_KIMI_REPLY' WHERE id = $1`,
+      [jobId]
     );
     await client.query(
       `INSERT INTO brad_managed_kimi_inbound (
-         person_id, channel, external_message_id, conversation_id, sender_id,
-         content_digest, source_message_id, objective_id, thread_id, executive_job_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [personId, channel, externalMessageId, conversationId, senderId, digest(text), sourceMessageId, objectiveId, threadId, jobId]
+         id, person_id, channel, external_message_id, conversation_id, sender_id,
+         content_digest, source_message_id, objective_id, thread_id, executive_job_id,
+         status, claim_token, claim_owner, claim_expires_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'CLAIMED',$12,$13,
+         now() + ($14 || ' seconds')::interval)`,
+      [
+        inboundId, personId, channel, externalMessageId, conversationId, senderId,
+        contentDigest, sourceMessageId, objectiveId, threadId, jobId,
+        claimToken, claimOwner, String(CLAIM_TTL_SECONDS)
+      ]
     );
     await client.query('COMMIT');
-    emit({ ok: true, operation: 'intake', deduplicated: false, objectiveId, threadId, jobId });
+    emit({
+      ok: true,
+      operation: 'intake',
+      deduplicated: false,
+      settled: false,
+      inboundId,
+      objectiveId,
+      threadId,
+      jobId,
+      claimToken
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -345,43 +384,154 @@ async function intake(pool, encoded) {
   }
 }
 
-async function threadPull(pool, recoveryOnly = false) {
-  const result = await pool.query(
+async function loadManagedAssignment(client, inboundId, claimToken) {
+  const result = await client.query(
     `SELECT
+       b.id AS inbound_id, b.channel, b.conversation_id, b.claim_token,
        j.id AS job_id, j.status AS job_status, j.request_json, j.request_digest,
        t.id AS thread_id, t.status AS thread_status, t.reasoning_depth, t.authority_json,
        t.consecutive_agent_turns, t.max_consecutive_agent_turns,
-       o.id AS objective_id, o.goal, o.definition_of_done, o.verification_method,
+       o.id AS objective_id, o.session_key, o.goal, o.definition_of_done, o.verification_method,
        o.status AS objective_status, o.version AS objective_version,
        COALESCE(jsonb_agg(jsonb_build_object(
          'sender', m.sender_agent_id,
          'type', m.message_type,
          'body', m.body,
+         'artifactRefs', m.artifact_refs_json,
+         'evidenceRefs', m.evidence_refs_json,
          'sequence', m.sequence_no
        ) ORDER BY m.sequence_no) FILTER (WHERE m.id IS NOT NULL), '[]'::jsonb) AS messages
-     FROM brad_agent_jobs j
-     JOIN brad_agent_threads t ON t.id = j.thread_id AND t.person_id = j.person_id
-     JOIN brad_objectives o ON o.id = t.objective_id AND o.person_id = t.person_id
+     FROM brad_managed_kimi_inbound b
+     JOIN brad_agent_jobs j ON j.id = b.executive_job_id AND j.person_id = b.person_id
+     JOIN brad_agent_threads t ON t.id = b.thread_id AND t.person_id = b.person_id
+     JOIN brad_objectives o ON o.id = b.objective_id AND o.person_id = b.person_id
      LEFT JOIN brad_agent_messages m ON m.thread_id = t.id AND m.person_id = t.person_id
-     WHERE j.assigned_agent_id = 'brad-kimi'
-       AND j.status IN ('QUEUED','WAITING')
-       AND t.status NOT IN ('PAUSED','CANCELLED','SUCCEEDED','FAILED')
-       AND ($1::boolean = false OR j.updated_at < now() - interval '2 minutes')
-     GROUP BY j.id, t.id, o.id
-     ORDER BY j.created_at
-     LIMIT 1`,
-    [recoveryOnly]
+     WHERE b.id = $1 AND b.status = 'CLAIMED' AND b.claim_token = $2
+     GROUP BY b.id, j.id, t.id, o.id`,
+    [inboundId, claimToken]
   );
-  const row = result.rows[0];
-  if (!row) {
-    emit({ ok: true, operation: recoveryOnly ? 'recover' : 'thread-pull', assignment: null });
-    return;
+  return result.rows[0] ?? null;
+}
+
+async function threadTransfer(pool, encoded) {
+  const payload = decodeDecision(encoded);
+  const inboundId = validateText(payload.inboundId, 'inbound_id', 36);
+  const claimToken = validateText(payload.claimToken, 'claim_token', 36);
+  const claimOwner = validateManagedClaimPayload(payload);
+  const newClaimOwner = validateText(payload.newClaimOwner, 'new_claim_owner', 256);
+  if (![inboundId, claimToken].every((value) => UUID_PATTERN.test(value))) throw new Error('invalid_identifier');
+  if (!/^[A-Za-z0-9:._-]+$/.test(newClaimOwner)) throw new Error('invalid_new_claim_owner');
+  if (newClaimOwner === claimOwner) throw new Error('claim_owner_unchanged');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { personId } = await managedBinding(client);
+    const nextClaimToken = randomUUID();
+    const transferred = await client.query(
+      `UPDATE brad_managed_kimi_inbound b
+       SET claim_token = $5, claim_owner = $6,
+           claim_expires_at = now() + ($7 || ' seconds')::interval,
+           updated_at = now()
+       WHERE b.person_id = $1
+         AND b.id = $2
+         AND b.status = 'CLAIMED'
+         AND b.claim_token = $3
+         AND b.claim_owner = $4
+         AND b.claim_expires_at > now()
+         AND EXISTS (
+           SELECT 1
+           FROM brad_agent_jobs j
+           JOIN brad_agent_threads t ON t.id = j.thread_id AND t.person_id = j.person_id
+           JOIN brad_objectives o ON o.id = t.objective_id AND o.person_id = t.person_id
+           WHERE j.id = b.executive_job_id AND j.person_id = b.person_id
+             AND j.status = 'WAITING' AND j.last_error = 'WAITING_MANAGED_KIMI_REPLY'
+             AND t.id = b.thread_id AND t.status = 'WAITING' AND t.phase = 'WAITING_MANAGED_KIMI'
+             AND o.id = b.objective_id AND o.status IN ('RUNNING','WAITING')
+         )
+       RETURNING b.id`,
+      [
+        personId,
+        inboundId,
+        claimToken,
+        claimOwner,
+        nextClaimToken,
+        newClaimOwner,
+        String(CLAIM_TTL_SECONDS)
+      ]
+    );
+    if (transferred.rowCount !== 1) throw new Error('managed_kimi_claim_not_transferable');
+    const assignment = await loadManagedAssignment(client, inboundId, nextClaimToken);
+    if (!assignment) throw new Error('managed_kimi_assignment_missing');
+    const redactedAssignment = redactValue(assignment);
+    delete redactedAssignment.claim_token;
+    redactedAssignment.claimToken = nextClaimToken;
+    await client.query('COMMIT');
+    emit({ ok: true, operation: 'thread-transfer', assignment: redactedAssignment });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-  emit({
-    ok: true,
-    operation: recoveryOnly ? 'recover' : 'thread-pull',
-    assignment: redactValue(row)
-  });
+}
+
+async function threadPull(pool, encoded, recoveryOnly = false) {
+  const payload = decodeDecision(encoded);
+  const claimOwner = validateManagedClaimPayload(payload);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { personId } = await managedBinding(client);
+    const selected = await client.query(
+      `SELECT b.id
+       FROM brad_managed_kimi_inbound b
+       JOIN brad_agent_jobs j ON j.id = b.executive_job_id AND j.person_id = b.person_id
+       JOIN brad_agent_threads t ON t.id = b.thread_id AND t.person_id = b.person_id
+       JOIN brad_objectives o ON o.id = b.objective_id AND o.person_id = b.person_id
+       WHERE b.person_id = $1
+         AND (b.status = 'PENDING' OR (b.status = 'CLAIMED' AND b.claim_expires_at < now()))
+         AND j.assigned_agent_id = 'brad-kimi'
+         AND j.status = 'WAITING' AND j.last_error = 'WAITING_MANAGED_KIMI_REPLY'
+         AND t.status = 'WAITING' AND t.phase = 'WAITING_MANAGED_KIMI'
+         AND o.status IN ('RUNNING','WAITING')
+         AND ($2::boolean = false OR b.updated_at < now() - interval '2 minutes')
+       ORDER BY b.created_at
+       FOR UPDATE OF b SKIP LOCKED
+       LIMIT 1`,
+      [personId, recoveryOnly]
+    );
+    if (!selected.rows[0]) {
+      await client.query('COMMIT');
+      emit({ ok: true, operation: recoveryOnly ? 'recover' : 'thread-pull', assignment: null });
+      return;
+    }
+    const claimToken = randomUUID();
+    const inboundId = selected.rows[0].id;
+    await client.query(
+      `UPDATE brad_managed_kimi_inbound
+       SET status = 'CLAIMED', claim_token = $2, claim_owner = $3,
+           claim_expires_at = now() + ($4 || ' seconds')::interval, updated_at = now()
+       WHERE id = $1`,
+      [inboundId, claimToken, claimOwner, String(CLAIM_TTL_SECONDS)]
+    );
+    const assignment = await loadManagedAssignment(client, inboundId, claimToken);
+    if (!assignment) throw new Error('managed_kimi_assignment_missing');
+    const redactedAssignment = redactValue(assignment);
+    delete redactedAssignment.claim_token;
+    redactedAssignment.claimToken = claimToken;
+    await client.query('COMMIT');
+    emit({
+      ok: true,
+      operation: recoveryOnly ? 'recover' : 'thread-pull',
+      assignment: redactedAssignment
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function threadReply(pool, encoded) {
@@ -389,45 +539,81 @@ async function threadReply(pool, encoded) {
   const jobId = validateText(payload.jobId, 'job_id', 36);
   const threadId = validateText(payload.threadId, 'thread_id', 36);
   const objectiveId = validateText(payload.objectiveId, 'objective_id', 36);
+  const claimToken = validateText(payload.claimToken, 'claim_token', 36);
+  const claimOwner = validateManagedClaimPayload(payload);
   const sessionId = validateText(payload.sessionId, 'session_id', 512, false);
   const text = validateText(payload.text, 'text', 100000);
   const artifactRefs = validateArray(payload.artifactRefs, 'artifact_refs');
   const evidenceRefs = validateArray(payload.evidenceRefs, 'evidence_refs');
-  if (![jobId, threadId, objectiveId].every((value) => UUID_PATTERN.test(value))) throw new Error('invalid_identifier');
-  if (/\bjenni(?:pro)?\b/i.test(text)) throw new Error('forbidden_scope_jenni');
+  if (![jobId, threadId, objectiveId, claimToken].every((value) => UUID_PATTERN.test(value))) throw new Error('invalid_identifier');
+  assertNoForbiddenScope([text, artifactRefs, evidenceRefs]);
+  const responseDigest = payloadDigest({ text, artifactRefs, evidenceRefs });
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const { personId } = await managedBinding(client);
     const result = await client.query(
       `SELECT
-         j.*, t.objective_id, t.status AS thread_status, t.reasoning_depth,
+         j.*, b.id AS inbound_id, b.status AS inbound_status, b.claim_token, b.claim_owner,
+         b.claim_expires_at, b.response_digest,
+         t.objective_id, t.status AS thread_status, t.phase AS thread_phase,
+         t.authority_json, t.reasoning_depth,
          t.consecutive_agent_turns, t.max_consecutive_agent_turns,
-         o.goal, o.status AS objective_status
-       FROM brad_agent_jobs j
+         o.goal, o.definition_of_done, o.verification_method, o.status AS objective_status
+       FROM brad_managed_kimi_inbound b
+       JOIN brad_agent_jobs j ON j.id = b.executive_job_id AND j.person_id = b.person_id
        JOIN brad_agent_threads t ON t.id = j.thread_id AND t.person_id = j.person_id
        JOIN brad_objectives o ON o.id = t.objective_id AND o.person_id = t.person_id
-       WHERE j.id = $1 AND j.thread_id = $2 AND t.objective_id = $3
-       FOR UPDATE OF j, t, o`,
-      [jobId, threadId, objectiveId]
+       WHERE b.person_id = $1 AND j.id = $2 AND j.thread_id = $3 AND t.objective_id = $4
+       FOR UPDATE OF b, j, t, o`,
+      [personId, jobId, threadId, objectiveId]
     );
     const job = result.rows[0];
     if (!job || job.assigned_agent_id !== 'brad-kimi') throw new Error('managed_kimi_job_not_available');
-    if (TERMINAL_STATUSES.has(job.thread_status) || TERMINAL_STATUSES.has(job.objective_status)) throw new Error('objective_terminal');
-
-    const existing = await client.query(
-      `SELECT id FROM brad_agent_messages
-       WHERE thread_id = $1 AND metadata_json->>'managedKimiJobId' = $2
-       LIMIT 1`,
-      [threadId, jobId]
-    );
-    if (existing.rows[0] && job.status === 'SUCCEEDED') {
+    if (job.inbound_status === 'SETTLED') {
+      if (job.status !== 'SUCCEEDED' || job.response_digest !== responseDigest) {
+        throw new Error('managed_kimi_reply_digest_conflict');
+      }
       await client.query('COMMIT');
-      emit({ ok: true, operation: 'thread-reply', deduplicated: true, jobId, threadId, objectiveId });
+      emit({
+        ok: true,
+        operation: 'thread-reply',
+        deduplicated: true,
+        responseDigest,
+        jobId,
+        threadId,
+        objectiveId
+      });
       return;
     }
-    if (!['QUEUED', 'WAITING'].includes(job.status)) throw new Error('managed_kimi_job_busy');
+    if (job.inbound_status !== 'CLAIMED' || job.claim_token !== claimToken || job.claim_owner !== claimOwner) {
+      throw new Error('managed_kimi_claim_mismatch');
+    }
+    if (!job.claim_expires_at || new Date(job.claim_expires_at).getTime() < Date.now()) throw new Error('managed_kimi_claim_expired');
+    if (job.thread_status !== 'WAITING' || job.thread_phase !== 'WAITING_MANAGED_KIMI') throw new Error('managed_kimi_thread_not_waiting');
+    if (job.objective_status !== 'RUNNING') throw new Error('managed_kimi_objective_not_running');
+    if (job.status !== 'WAITING' || job.last_error !== 'WAITING_MANAGED_KIMI_REPLY') throw new Error('managed_kimi_job_not_waiting');
     if (job.consecutive_agent_turns >= job.max_consecutive_agent_turns) throw new Error('loop_budget_exhausted');
+    if (payloadDigest(job.request_json) !== job.request_digest) throw new Error('request_digest_mismatch');
+
+    const storedContext = await client.query(
+      `SELECT sender_agent_id, message_type, body, artifact_refs_json, evidence_refs_json
+       FROM brad_agent_messages
+       WHERE person_id = $1 AND thread_id = $2
+       ORDER BY sequence_no`,
+      [personId, threadId]
+    );
+    assertNoForbiddenScope([
+      job.goal,
+      job.definition_of_done,
+      job.verification_method,
+      requestContentForScope(job.request_json),
+      storedContext.rows,
+      text,
+      artifactRefs,
+      evidenceRefs
+    ], job.authority_json);
 
     const sequence = await client.query(
       `SELECT (COALESCE(MAX(sequence_no), 0) + 1)::bigint AS next
@@ -465,7 +651,7 @@ async function threadReply(pool, encoded) {
       await client.query(
         `INSERT INTO brad_agent_sessions (
            person_id, thread_id, agent_id, provider_session_id, model, status, last_checkpoint_json
-         ) VALUES ($1,$2,'brad-kimi',$3,'kimi/k2p6','ACTIVE',$4::jsonb)
+         ) VALUES ($1,$2,'brad-kimi',$3,'kimi-coding/k2p6','ACTIVE',$4::jsonb)
          ON CONFLICT (thread_id, agent_id) DO UPDATE SET
            provider_session_id = EXCLUDED.provider_session_id,
            model = EXCLUDED.model,
@@ -477,7 +663,8 @@ async function threadReply(pool, encoded) {
     }
     await client.query(
       `UPDATE brad_agent_jobs
-       SET status = 'SUCCEEDED', leased_until = NULL, finished_at = now(), updated_at = now()
+       SET status = 'SUCCEEDED', leased_until = NULL, lease_token = NULL,
+           worker_identity = NULL, last_error = NULL, finished_at = now(), updated_at = now()
        WHERE id = $1`,
       [jobId]
     );
@@ -511,11 +698,19 @@ async function threadReply(pool, encoded) {
        ON CONFLICT (destination, idempotency_key) DO NOTHING`,
       [job.person_id, threadId, encodeBody({ threadId }), `redis:next:${jobId}:hermes`]
     );
+    await client.query(
+      `UPDATE brad_managed_kimi_inbound
+       SET status = 'SETTLED', response_digest = $2, settled_at = now(),
+           claim_token = NULL, claim_owner = NULL, claim_expires_at = NULL, updated_at = now()
+       WHERE id = $1`,
+      [job.inbound_id, responseDigest]
+    );
     await client.query('COMMIT');
     emit({
       ok: true,
       operation: 'thread-reply',
       deduplicated: false,
+      responseDigest,
       jobId,
       threadId,
       objectiveId,
@@ -529,21 +724,151 @@ async function threadReply(pool, encoded) {
   }
 }
 
+async function threadDelivery(pool, encoded) {
+  const payload = decodeDecision(encoded);
+  const inboundId = validateText(payload.inboundId, 'inbound_id', 36);
+  const jobId = validateText(payload.jobId, 'job_id', 36);
+  const responseDigest = validateText(payload.responseDigest, 'response_digest', 64);
+  const messageId = validateText(payload.messageId, 'message_id', 512, false);
+  const success = payload.success;
+  if (![inboundId, jobId].every((value) => UUID_PATTERN.test(value))) throw new Error('invalid_identifier');
+  if (!/^[0-9a-f]{64}$/i.test(responseDigest)) throw new Error('invalid_response_digest');
+  if (typeof success !== 'boolean') throw new Error('invalid_delivery_success');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { personId } = await managedBinding(client);
+    const result = await client.query(
+      `SELECT b.status, b.response_digest, b.delivery_status,
+              b.delivery_message_id, b.delivered_at, j.status AS job_status
+       FROM brad_managed_kimi_inbound b
+       JOIN brad_agent_jobs j ON j.id = b.executive_job_id AND j.person_id = b.person_id
+       WHERE b.person_id = $1 AND b.id = $2 AND b.executive_job_id = $3
+       FOR UPDATE OF b, j`,
+      [personId, inboundId, jobId]
+    );
+    const delivery = result.rows[0];
+    if (!delivery) throw new Error('managed_kimi_delivery_not_available');
+    if (
+      delivery.status !== 'SETTLED'
+      || delivery.job_status !== 'SUCCEEDED'
+      || delivery.response_digest !== responseDigest
+    ) throw new Error('managed_kimi_delivery_settlement_mismatch');
+
+    if (success) {
+      if (delivery.delivery_status === 'RECONCILE_REQUIRED') {
+        throw new Error('managed_kimi_delivery_reconcile_required');
+      }
+      if (delivery.delivery_status === 'DELIVERED') {
+        if (
+          messageId
+          && delivery.delivery_message_id
+          && messageId !== delivery.delivery_message_id
+        ) throw new Error('managed_kimi_delivery_message_conflict');
+        await client.query('COMMIT');
+        emit({ ok: true, operation: 'thread-delivery', deduplicated: true, status: 'DELIVERED' });
+        return;
+      }
+      await client.query(
+        `UPDATE brad_managed_kimi_inbound
+         SET delivery_status = 'DELIVERED', delivery_message_id = $2,
+             delivered_at = now(), updated_at = now()
+         WHERE id = $1`,
+        [inboundId, messageId]
+      );
+      await client.query('COMMIT');
+      emit({ ok: true, operation: 'thread-delivery', deduplicated: false, status: 'DELIVERED' });
+      return;
+    }
+
+    if (delivery.delivery_status === 'DELIVERED') throw new Error('managed_kimi_delivery_already_delivered');
+    if (delivery.delivery_status === 'PENDING') {
+      await client.query(
+        `UPDATE brad_managed_kimi_inbound
+         SET delivery_status = 'RECONCILE_REQUIRED', delivery_message_id = NULL,
+             delivered_at = NULL, updated_at = now()
+         WHERE id = $1`,
+        [inboundId]
+      );
+    }
+    await client.query('COMMIT');
+    emit({
+      ok: true,
+      operation: 'thread-delivery',
+      deduplicated: delivery.delivery_status === 'RECONCILE_REQUIRED',
+      status: 'RECONCILE_REQUIRED'
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function threadRenew(pool, encoded) {
+  const payload = decodeDecision(encoded);
+  const jobId = validateText(payload.jobId, 'job_id', 36);
+  const claimToken = validateText(payload.claimToken, 'claim_token', 36);
+  const claimOwner = validateManagedClaimPayload(payload);
+  if (!UUID_PATTERN.test(jobId) || !UUID_PATTERN.test(claimToken)) throw new Error('invalid_identifier');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { personId } = await managedBinding(client);
+    const renewed = await client.query(
+      `UPDATE brad_managed_kimi_inbound b
+       SET claim_expires_at = now() + ($4 || ' seconds')::interval, updated_at = now()
+       FROM brad_agent_jobs j, brad_agent_threads t
+       WHERE b.person_id = $1
+         AND b.executive_job_id = $2
+         AND b.status = 'CLAIMED'
+         AND b.claim_token = $3
+         AND b.claim_owner = $5
+         AND b.claim_expires_at > now()
+         AND j.id = b.executive_job_id AND j.person_id = b.person_id
+         AND j.status = 'WAITING' AND j.last_error = 'WAITING_MANAGED_KIMI_REPLY'
+         AND t.id = b.thread_id AND t.person_id = b.person_id
+         AND t.status = 'WAITING' AND t.phase = 'WAITING_MANAGED_KIMI'
+       RETURNING b.id`,
+      [personId, jobId, claimToken, String(CLAIM_TTL_SECONDS), claimOwner]
+    );
+    if (renewed.rowCount !== 1) throw new Error('managed_kimi_claim_not_renewable');
+    await client.query('COMMIT');
+    emit({ ok: true, operation: 'thread-renew', jobId });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function threadStatus(pool, jobId) {
   if (!UUID_PATTERN.test(jobId ?? '')) throw new Error('invalid_job_id');
-  const result = await pool.query(
-    `SELECT j.id AS job_id, j.status AS job_status, t.id AS thread_id,
-            t.status AS thread_status, t.phase, t.blocker_code,
-            o.id AS objective_id, o.status AS objective_status,
-            t.consecutive_agent_turns, t.max_consecutive_agent_turns
-     FROM brad_agent_jobs j
-     JOIN brad_agent_threads t ON t.id = j.thread_id AND t.person_id = j.person_id
-     JOIN brad_objectives o ON o.id = t.objective_id AND o.person_id = t.person_id
-     WHERE j.id = $1 AND j.assigned_agent_id = 'brad-kimi'`,
-    [jobId]
-  );
-  if (!result.rows[0]) throw new Error('managed_kimi_job_not_available');
-  emit({ ok: true, operation: 'thread-status', ...result.rows[0] });
+  const client = await pool.connect();
+  try {
+    const { personId } = await managedBinding(client);
+    const result = await client.query(
+      `SELECT j.id AS job_id, j.status AS job_status, t.id AS thread_id,
+              t.status AS thread_status, t.phase, t.blocker_code,
+              o.id AS objective_id, o.status AS objective_status,
+              b.status AS bridge_status,
+              t.consecutive_agent_turns, t.max_consecutive_agent_turns
+       FROM brad_managed_kimi_inbound b
+       JOIN brad_agent_jobs j ON j.id = b.executive_job_id AND j.person_id = b.person_id
+       JOIN brad_agent_threads t ON t.id = j.thread_id AND t.person_id = j.person_id
+       JOIN brad_objectives o ON o.id = t.objective_id AND o.person_id = t.person_id
+       WHERE b.person_id = $1 AND j.id = $2 AND j.assigned_agent_id = 'brad-kimi'`,
+      [personId, jobId]
+    );
+    if (!result.rows[0]) throw new Error('managed_kimi_job_not_available');
+    emit({ ok: true, operation: 'thread-status', ...result.rows[0] });
+  } finally {
+    client.release();
+  }
 }
 
 async function pull(pool) {
@@ -807,12 +1132,12 @@ async function main() {
   const parts = rawCommand.split(/\s+/).filter(Boolean);
   const operation = parts[0];
   const argument = parts[1];
-  const allowed = ['health', 'pull', 'decide', 'receipt', 'intake', 'thread-pull', 'thread-reply', 'thread-status', 'recover'];
+  const allowed = ['health', 'pull', 'decide', 'receipt', 'intake', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'];
   if (!operation || parts.length > 2 || !allowed.includes(operation)) {
     reject('command_not_allowed');
     return;
   }
-  const requiresArgument = ['decide', 'receipt', 'intake', 'thread-reply', 'thread-status'].includes(operation);
+  const requiresArgument = ['decide', 'receipt', 'intake', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'].includes(operation);
   if (requiresArgument !== Boolean(argument)) {
     reject('invalid_arguments');
     return;
@@ -825,10 +1150,13 @@ async function main() {
     if (operation === 'decide') await decide(pool, argument);
     if (operation === 'receipt') await receipt(pool, argument);
     if (operation === 'intake') await intake(pool, argument);
-    if (operation === 'thread-pull') await threadPull(pool, false);
+    if (operation === 'thread-pull') await threadPull(pool, argument, false);
+    if (operation === 'thread-transfer') await threadTransfer(pool, argument);
+    if (operation === 'thread-renew') await threadRenew(pool, argument);
     if (operation === 'thread-reply') await threadReply(pool, argument);
+    if (operation === 'thread-delivery') await threadDelivery(pool, argument);
     if (operation === 'thread-status') await threadStatus(pool, argument);
-    if (operation === 'recover') await threadPull(pool, true);
+    if (operation === 'recover') await threadPull(pool, argument, true);
   } catch (error) {
     const code = error instanceof Error ? error.message : 'gateway_error';
     reject(/^[a-z0-9_]+$/.test(code) ? code : 'gateway_error', 1);

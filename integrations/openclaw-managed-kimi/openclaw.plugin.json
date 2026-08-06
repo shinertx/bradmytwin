@@ -1,12 +1,36 @@
 {
   "id": "brad-managed-kimi",
   "name": "Brad Managed Kimi Bridge",
-  "description": "Mirrors managed Kimi messages and replies into Brad's durable control plane.",
-  "version": "1.0.0",
+  "description": "Correlates managed Kimi runs with exact Brad durable-control-plane claims.",
+  "version": "1.4.0",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "required": ["managedAgentId", "modelProvider", "model", "recoveryEnabled"],
+    "properties": {
+      "managedAgentId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "modelProvider": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      },
+      "recoveryEnabled": {
+        "type": "boolean",
+        "description": "Run the two-minute durable recovery scheduler. Disable in staging."
+      }
+    }
   }
 }

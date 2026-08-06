@@ -1,41 +1,28 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-const STATE_PATH = '/root/.openclaw/brad-conductor/pending.json';
 const SSH_KEY = '/root/.ssh/id_ed25519_brad_gateway';
 const SSH_HOST = 'benjijmac@35.188.189.202';
-const MAX_PENDING_AGE_MS = 30 * 60 * 1000;
-
-function sha256(value) {
-  return createHash('sha256').update(value).digest('hex');
-}
+const MAX_RUN_AGE_MS = 30 * 60 * 1000;
+const MAX_RUN_ID_LENGTH = 243;
+const CLAIM_RENEW_INTERVAL_MS = 60 * 1000;
+const RECOVERY_SCAN_INTERVAL_MS = 2 * 60 * 1000;
+const MAX_RECOVERIES_PER_SCAN = 20;
+const RECOVERY_PACKET_PREFIX = 'BRAD_RECOVERY_PACKET_V1:';
+const CONFIG_KEYS = new Set(['managedAgentId', 'modelProvider', 'model', 'recoveryEnabled']);
+const BRAD_EXECUTIVE_SYSTEM_CONTEXT = [
+  'You are Brad, Ben\'s Kimi-powered executive identity inside a durable multi-agent control plane.',
+  'Treat every normal owner message as an objective. Reason proportionally using: objective, binding constraint, hidden assumption, strongest candidate, strongest attack, repaired decision, and decisive proof test.',
+  'Take a position. Return a concise owner-readable executive decision that also gives the next specialist an unambiguous assignment and proof requirement.',
+  'Do not perform tools or external effects directly. The control plane delegates one next agent, preserves the full discussion in Buzz, and independently verifies completion.',
+  'Never expand authority, access JENNI, expose credentials, or bypass exact-action approval for sends, spending, deletion, deployment, legal action, publication, or credential changes.',
+  'Do not call work complete without source-of-record evidence. State a precise blocker when proof or authority is missing.'
+].join('\n');
 
 function encode(value) {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
-}
-
-function correlationKey(channelId, conversationId) {
-  return `${channelId || 'unknown'}:${conversationId || 'unknown'}`;
-}
-
-async function loadState() {
-  try {
-    const parsed = JSON.parse(await readFile(STATE_PATH, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : { pending: {} };
-  } catch {
-    return { pending: {} };
-  }
-}
-
-async function saveState(state) {
-  await mkdir(dirname(STATE_PATH), { recursive: true, mode: 0o700 });
-  const temp = `${STATE_PATH}.tmp`;
-  await writeFile(temp, `${JSON.stringify(state)}\n`, { mode: 0o600 });
-  await rename(temp, STATE_PATH);
 }
 
 async function gateway(operation, payload) {
@@ -48,25 +35,32 @@ async function gateway(operation, payload) {
     '-o', 'ConnectTimeout=8',
     SSH_HOST,
     remoteCommand
-  ], { timeout: 20_000, maxBuffer: 256 * 1024 });
+  ], { timeout: 12_000, maxBuffer: 256 * 1024 });
   const parsed = JSON.parse(stdout.trim());
   if (!parsed?.ok) throw new Error(parsed?.error || 'brad_gateway_rejected');
   return parsed;
 }
 
-function assistantText(messages) {
+function messageText(message) {
+  if (typeof message === 'string') return message.trim();
+  if (!message || typeof message !== 'object') return '';
+  if (typeof message.content === 'string') return message.content.trim();
+  if (!Array.isArray(message.content)) return '';
+  return message.content
+    .map((part) => typeof part === 'string' ? part : part?.type === 'text' ? part.text : '')
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function assistantText(event) {
+  const finalText = messageText(event?.lastAssistantMessage);
+  if (finalText) return finalText;
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== 'object' || message.role !== 'assistant') continue;
-    if (typeof message.content === 'string' && message.content.trim()) return message.content.trim();
-    if (Array.isArray(message.content)) {
-      const text = message.content
-        .map((part) => typeof part === 'string' ? part : part?.type === 'text' ? part.text : '')
-        .filter(Boolean)
-        .join('\n')
-        .trim();
-      if (text) return text;
-    }
+    if (messages[index]?.role !== 'assistant') continue;
+    const text = messageText(messages[index]);
+    if (text) return text;
   }
   return '';
 }
@@ -76,79 +70,559 @@ function commandAllowed(params) {
     ? params.command
     : Array.isArray(params?.command) ? params.command.join(' ') : '';
   if (!command || /[;&|`\n\r]|\$\(/.test(command)) return false;
-  return /^(?:\/usr\/bin\/timeout 20s )?\/usr\/bin\/ssh -i \/root\/\.ssh\/id_ed25519_brad_gateway -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=8 benjijmac@35\.188\.189\.202 (?:health|thread-pull|recover|thread-status [0-9a-f-]{36}|thread-reply [A-Za-z0-9_-]+)$/i.test(command);
+  return /^(?:\/usr\/bin\/timeout 20s )?\/usr\/bin\/ssh -i \/root\/\.ssh\/id_ed25519_brad_gateway -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=8 benjijmac@35\.188\.189\.202 (?:health|thread-status [0-9a-f-]{36})$/i.test(command);
 }
 
-export default {
-  id: 'brad-managed-kimi',
-  name: 'Brad Managed Kimi Bridge',
-  register(api) {
-    api.on('message_received', async (event, ctx) => {
-      const content = typeof event.content === 'string' ? event.content.trim() : '';
-      if (!content || content.startsWith('/')) return;
-      const metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : {};
-      const timestamp = Number(event.timestamp) || Date.now();
-      const channel = String(ctx.channelId || '').toLowerCase().includes('telegram') ? 'TELEGRAM' : 'KIMI';
-      const conversationId = String(ctx.conversationId || metadata.conversationId || ctx.channelId || 'managed-kimi');
-      const externalMessageId = String(
-        metadata.messageId || sha256(`${ctx.channelId}|${conversationId}|${timestamp}|${content}`)
-      );
-      const result = await gateway('intake', {
-        channel,
-        externalMessageId,
-        conversationId,
-        senderId: String(metadata.senderId || event.from || 'owner'),
-        timestamp,
-        text: content
-      });
-      const state = await loadState();
-      const now = Date.now();
-      state.pending = Object.fromEntries(
-        Object.entries(state.pending || {}).filter(([, value]) => now - Number(value.createdAt || 0) < MAX_PENDING_AGE_MS)
-      );
-      state.pending[correlationKey(ctx.channelId, ctx.conversationId)] = {
-        jobId: result.jobId,
-        threadId: result.threadId,
-        objectiveId: result.objectiveId,
-        createdAt: now
-      };
-      await saveState(state);
-    }, { priority: 90 });
+function normalizedString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
 
-    api.on('agent_end', async (event, ctx) => {
-      if (!event.success) return;
-      const text = assistantText(Array.isArray(event.messages) ? event.messages : []);
-      if (!text) return;
-      const state = await loadState();
-      const keyPrefix = `${ctx.channelId || 'unknown'}:`;
-      const direct = Object.entries(state.pending || {})
-        .filter(([candidate]) => candidate.startsWith(keyPrefix))
-        .sort((a, b) => Number(b[1].createdAt || 0) - Number(a[1].createdAt || 0))[0];
-      let [pendingKey, pending] = direct || [];
-      if (!pending) {
-        const candidates = Object.entries(state.pending || {})
-          .filter(([, value]) => Date.now() - Number(value.createdAt || 0) < MAX_PENDING_AGE_MS)
-          .sort((a, b) => Number(b[1].createdAt || 0) - Number(a[1].createdAt || 0));
-        [pendingKey, pending] = candidates[0] || [];
-      }
-      if (!pending) return;
-      await gateway('thread-reply', {
-        jobId: pending.jobId,
-        threadId: pending.threadId,
-        objectiveId: pending.objectiveId,
-        sessionId: ctx.sessionId || ctx.sessionKey || null,
-        text
-      });
-      delete state.pending[pendingKey];
-      await saveState(state);
-    }, { priority: 90 });
-
-    api.on('before_tool_call', async (event) => {
-      if (event.toolName === 'exec' && commandAllowed(event.params)) return;
-      return {
-        block: true,
-        blockReason: 'Brad delegates tools through the approval-gated control plane.'
-      };
-    }, { priority: 100 });
+function runIdFrom(...values) {
+  for (const source of values) {
+    const value = source?.runId;
+    if (
+      typeof value === 'string'
+      && value
+      && value.length <= MAX_RUN_ID_LENGTH
+      && value === value.trim()
+      && /^[A-Za-z0-9._:-]+$/.test(value)
+    ) return value;
   }
-};
+  return '';
+}
+
+function configString(config, key, pattern, maxLength) {
+  const value = normalizedString(config[key]);
+  if (!value || value.length > maxLength || !pattern.test(value)) {
+    throw new Error(`brad-managed-kimi requires a valid pluginConfig.${key}`);
+  }
+  return value;
+}
+
+function parsePluginConfig(pluginConfig) {
+  if (!pluginConfig || typeof pluginConfig !== 'object' || Array.isArray(pluginConfig)) {
+    throw new Error('brad-managed-kimi requires pluginConfig');
+  }
+  const unknownKeys = Object.keys(pluginConfig).filter((key) => !CONFIG_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    throw new Error(`brad-managed-kimi received unknown pluginConfig key: ${unknownKeys[0]}`);
+  }
+  if (typeof pluginConfig.recoveryEnabled !== 'boolean') {
+    throw new Error('brad-managed-kimi requires a boolean pluginConfig.recoveryEnabled');
+  }
+  return Object.freeze({
+    managedAgentId: configString(pluginConfig, 'managedAgentId', /^[A-Za-z0-9][A-Za-z0-9._-]*$/, 128),
+    modelProvider: configString(pluginConfig, 'modelProvider', /^[A-Za-z0-9][A-Za-z0-9._-]*$/, 128),
+    model: configString(pluginConfig, 'model', /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 256),
+    recoveryEnabled: pluginConfig.recoveryEnabled
+  });
+}
+
+function isManagedBradRun(ctx, config) {
+  if (normalizedString(ctx?.trigger).toLowerCase() === 'cron') return false;
+  return normalizedString(ctx?.agentId) === config.managedAgentId;
+}
+
+function sourceChannel(event, ctx) {
+  const provider = [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel]
+    .map((value) => normalizedString(value).toLowerCase())
+    .find(Boolean) ?? '';
+  if (provider.includes('telegram')) return 'TELEGRAM';
+  if (provider.includes('kimi')) return 'KIMI';
+  return 'WEB';
+}
+
+function boundedContextValue(values, maxLength, fallback = '') {
+  for (const value of values) {
+    const normalized = normalizedString(value);
+    if (normalized && normalized.length <= maxLength) return normalized;
+  }
+  return fallback;
+}
+
+function claimField(result, key, maxLength) {
+  const value = normalizedString(result?.[key]);
+  if (!value || value.length > maxLength) throw new Error(`brad_gateway_invalid_${key}`);
+  return value;
+}
+
+function validateClaim(result) {
+  if (!result || typeof result !== 'object' || result.ok === false) {
+    throw new Error('brad_gateway_intake_rejected');
+  }
+  if (result.settled === true) throw new Error('brad_gateway_message_already_settled');
+  return Object.freeze({
+    inboundId: claimField(result, 'inboundId', 256),
+    claimToken: claimField(result, 'claimToken', 4096),
+    jobId: claimField(result, 'jobId', 256),
+    threadId: claimField(result, 'threadId', 256),
+    objectiveId: claimField(result, 'objectiveId', 256)
+  });
+}
+
+function validateRecoveryAssignment(result) {
+  const assignment = result?.assignment;
+  if (!result?.ok || !assignment || typeof assignment !== 'object') {
+    throw new Error('brad_gateway_recovery_assignment_invalid');
+  }
+  return Object.freeze({
+    inboundId: claimField(assignment, 'inbound_id', 256),
+    claimToken: claimField(assignment, 'claimToken', 4096),
+    jobId: claimField(assignment, 'job_id', 256),
+    threadId: claimField(assignment, 'thread_id', 256),
+    objectiveId: claimField(assignment, 'objective_id', 256),
+    sessionKey: claimField(assignment, 'session_key', 512),
+    channel: claimField(assignment, 'channel', 20),
+    conversationId: claimField(assignment, 'conversation_id', 512),
+    goal: claimField(assignment, 'goal', 100_000),
+    definitionOfDone: claimField(assignment, 'definition_of_done', 100_000),
+    verificationMethod: claimField(assignment, 'verification_method', 100_000),
+    messages: Array.isArray(assignment.messages) ? assignment.messages.slice(-12) : []
+  });
+}
+
+function buildRecoveryPacket(assignment, nonce) {
+  const packet = {
+    v: 1,
+    nonce,
+    inboundId: assignment.inboundId,
+    objectiveId: assignment.objectiveId,
+    threadId: assignment.threadId,
+    jobId: assignment.jobId,
+    goal: assignment.goal,
+    definitionOfDone: assignment.definitionOfDone,
+    verificationMethod: assignment.verificationMethod,
+    messages: assignment.messages
+  };
+  return `${RECOVERY_PACKET_PREFIX}${encode(packet)}`;
+}
+
+function parseRecoveryPacket(prompt) {
+  const text = normalizedString(prompt);
+  if (!text.startsWith(RECOVERY_PACKET_PREFIX)) return null;
+  const encoded = text.slice(RECOVERY_PACKET_PREFIX.length);
+  if (!encoded || encoded.length > 200_000 || !/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+  try {
+    const packet = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (packet?.v !== 1) return null;
+    for (const key of ['nonce', 'inboundId', 'objectiveId', 'threadId', 'jobId']) {
+      if (!normalizedString(packet[key])) return null;
+    }
+    return packet;
+  } catch {
+    return null;
+  }
+}
+
+export function createManagedKimiPlugin(options = {}) {
+  const callGateway = options.gateway || gateway;
+  const now = options.now || Date.now;
+  const scheduleInterval = options.setInterval || globalThis.setInterval;
+  const cancelInterval = options.clearInterval || globalThis.clearInterval;
+  const randomId = options.randomUUID || randomUUID;
+  if (typeof callGateway !== 'function') throw new TypeError('gateway must be a function');
+  if (typeof now !== 'function') throw new TypeError('now must be a function');
+  if (typeof scheduleInterval !== 'function' || typeof cancelInterval !== 'function') {
+    throw new TypeError('interval scheduler must be a function');
+  }
+
+  return {
+    id: 'brad-managed-kimi',
+    name: 'Brad Managed Kimi Bridge',
+    register(api) {
+      const config = parsePluginConfig(api.pluginConfig);
+      const scheduleSessionTurn = api?.session?.workflow?.scheduleSessionTurn;
+      if (config.recoveryEnabled && typeof scheduleSessionTurn !== 'function') {
+        throw new Error('brad-managed-kimi recovery requires api.session.workflow.scheduleSessionTurn');
+      }
+
+      const runStates = new Map();
+      const inboundStates = new Map();
+      const recoveryClaims = new Map();
+      const recoveryOwner = `openclaw-recovery:${randomId()}`;
+      let recoveryTimer = null;
+      let recoveryScanActive = false;
+
+      const stopHeartbeat = (state) => {
+        if (!state?.heartbeat) return;
+        cancelInterval(state.heartbeat);
+        state.heartbeat = null;
+      };
+
+      const deleteRunState = (runId, expectedState) => {
+        const state = runStates.get(runId);
+        if (!state || (expectedState && state !== expectedState)) return;
+        stopHeartbeat(state);
+        runStates.delete(runId);
+        inboundStates.delete(runId);
+      };
+
+      const invalidateRunState = (runId, state, reason) => {
+        if (runStates.get(runId) !== state) return;
+        stopHeartbeat(state);
+        state.status = reason;
+        state.invalidatedAt = now();
+      };
+
+      const pruneStates = () => {
+        const cutoff = now() - MAX_RUN_AGE_MS;
+        for (const [runId, state] of runStates) {
+          if (state.createdAt < cutoff) deleteRunState(runId, state);
+        }
+        for (const [runId, state] of inboundStates) {
+          if (state.createdAt < cutoff) inboundStates.delete(runId);
+        }
+        for (const [inboundId, state] of recoveryClaims) {
+          if (state.createdAt < cutoff) recoveryClaims.delete(inboundId);
+        }
+      };
+
+      const modelDefaults = () => ({
+        providerOverride: config.modelProvider,
+        modelOverride: config.model
+      });
+
+      const requireRunId = (event, ctx) => {
+        const runId = runIdFrom(ctx, event);
+        if (!runId) throw new Error('managed_kimi_run_id_required');
+        return runId;
+      };
+
+      const findOutboundState = (event, ctx) => {
+        const exactRunId = runIdFrom(event, ctx);
+        if (exactRunId && runStates.has(exactRunId)) {
+          return { runId: exactRunId, state: runStates.get(exactRunId) };
+        }
+        const sessionKey = boundedContextValue([event?.sessionKey, ctx?.sessionKey], 512);
+        if (!sessionKey) return null;
+        const matches = [...runStates.entries()].filter(([, state]) => state.sessionKey === sessionKey);
+        return matches.length === 1 ? { runId: matches[0][0], state: matches[0][1] } : null;
+      };
+
+      const isManagedOutboundSession = (event, ctx) => {
+        const sessionKey = boundedContextValue([event?.sessionKey, ctx?.sessionKey], 512);
+        return sessionKey.startsWith(`agent:${config.managedAgentId}:`);
+      };
+
+      const activateClaim = (runId, claim) => {
+        const state = {
+          status: 'claimed',
+          claim,
+          sessionKey: claim.sessionKey,
+          createdAt: now(),
+          heartbeat: null
+        };
+        const heartbeat = scheduleInterval(() => {
+          if (runStates.get(runId) !== state || state.status !== 'claimed') return;
+          void callGateway('thread-renew', {
+            claimToken: claim.claimToken,
+            claimOwner: claim.claimOwner,
+            jobId: claim.jobId
+          }).catch(() => invalidateRunState(runId, state, 'renewal_failed'));
+        }, CLAIM_RENEW_INTERVAL_MS);
+        heartbeat?.unref?.();
+        state.heartbeat = heartbeat;
+        runStates.set(runId, state);
+        return state;
+      };
+
+      const claimNormalRun = async (event, ctx, runId) => {
+        const inbound = inboundStates.get(runId);
+        if (!inbound || inbound.senderIsOwner !== true) throw new Error('managed_kimi_owner_proof_required');
+        if (!inbound.externalMessageId || !inbound.sessionKey || !inbound.conversationId || !inbound.senderId) {
+          throw new Error('managed_kimi_inbound_correlation_required');
+        }
+        const text = normalizedString(event?.prompt);
+        if (!text) throw new Error('managed_kimi_prompt_required');
+        const claimOwner = `openclaw-run:${runId}`;
+        const result = await callGateway('intake', {
+          channel: inbound.channel,
+          externalMessageId: inbound.externalMessageId,
+          conversationId: inbound.conversationId,
+          sessionKey: inbound.sessionKey,
+          senderId: inbound.senderId,
+          claimOwner,
+          timestamp: now(),
+          text
+        });
+        return Object.freeze({ ...validateClaim(result), claimOwner, sessionKey: inbound.sessionKey });
+      };
+
+      const claimRecoveryRun = async (event, ctx, runId, packet) => {
+        const pending = recoveryClaims.get(packet.inboundId);
+        if (
+          !pending
+          || pending.nonce !== packet.nonce
+          || pending.assignment.objectiveId !== packet.objectiveId
+          || pending.assignment.threadId !== packet.threadId
+          || pending.assignment.jobId !== packet.jobId
+        ) throw new Error('managed_kimi_recovery_claim_missing');
+        const claimOwner = `openclaw-run:${runId}`;
+        const result = await callGateway('thread-transfer', {
+          inboundId: pending.assignment.inboundId,
+          claimToken: pending.assignment.claimToken,
+          claimOwner: pending.claimOwner,
+          newClaimOwner: claimOwner
+        });
+        const assignment = validateRecoveryAssignment(result);
+        if (assignment.inboundId !== pending.assignment.inboundId) {
+          throw new Error('managed_kimi_recovery_transfer_mismatch');
+        }
+        recoveryClaims.delete(packet.inboundId);
+        return Object.freeze({
+          inboundId: assignment.inboundId,
+          claimToken: assignment.claimToken,
+          jobId: assignment.jobId,
+          threadId: assignment.threadId,
+          objectiveId: assignment.objectiveId,
+          claimOwner,
+          sessionKey: assignment.sessionKey
+        });
+      };
+
+      const claimRun = async (event, ctx) => {
+        pruneStates();
+        const runId = requireRunId(event, ctx);
+        const existing = runStates.get(runId);
+        if (existing?.status === 'claimed') return existing;
+        if (existing?.status === 'claiming') return existing.promise;
+        if (existing) throw new Error('managed_kimi_run_not_claimable');
+
+        const packet = parseRecoveryPacket(event?.prompt);
+        const sessionKey = packet
+          ? recoveryClaims.get(packet.inboundId)?.assignment.sessionKey
+          : inboundStates.get(runId)?.sessionKey ?? boundedContextValue([ctx?.sessionKey], 512);
+        const promise = Promise.resolve()
+          .then(() => packet
+            ? claimRecoveryRun(event, ctx, runId, packet)
+            : claimNormalRun(event, ctx, runId))
+          .then((claim) => activateClaim(runId, claim));
+        const claimingState = { status: 'claiming', promise, sessionKey, createdAt: now(), heartbeat: null };
+        runStates.set(runId, claimingState);
+
+        try {
+          return await promise;
+        } catch (error) {
+          if (runStates.get(runId) === claimingState) {
+            runStates.set(runId, { status: 'rejected', sessionKey, createdAt: now(), heartbeat: null });
+          }
+          throw error;
+        }
+      };
+
+      const settleRun = async (event, ctx) => {
+        pruneStates();
+        if (!isManagedBradRun(ctx, config)) return;
+        const runId = runIdFrom(ctx, event);
+        if (!runId) return;
+        const state = runStates.get(runId);
+        if (!state || state.status === 'settled' || state.status === 'settling') return;
+        if (state.status !== 'claimed') return;
+        const text = assistantText(event);
+        if (!text) {
+          invalidateRunState(runId, state, 'settlement_failed');
+          return;
+        }
+
+        stopHeartbeat(state);
+        state.status = 'settling';
+        try {
+          const result = await callGateway('thread-reply', {
+            claimToken: state.claim.claimToken,
+            jobId: state.claim.jobId,
+            threadId: state.claim.threadId,
+            objectiveId: state.claim.objectiveId,
+            claimOwner: state.claim.claimOwner,
+            sessionId: ctx.sessionId || ctx.sessionKey || null,
+            text
+          });
+          state.responseDigest = claimField(result, 'responseDigest', 64);
+          state.status = 'settled';
+          state.settledAt = now();
+        } catch {
+          state.status = 'settlement_failed';
+          state.invalidatedAt = now();
+        }
+      };
+
+      const recoverStalled = async () => {
+        if (!config.recoveryEnabled || recoveryScanActive) return;
+        recoveryScanActive = true;
+        try {
+          pruneStates();
+          for (let count = 0; count < MAX_RECOVERIES_PER_SCAN; count += 1) {
+            const result = await callGateway('recover', { claimOwner: recoveryOwner });
+            if (!result?.assignment) break;
+            const assignment = validateRecoveryAssignment(result);
+            const nonce = randomId();
+            recoveryClaims.set(assignment.inboundId, {
+              assignment,
+              claimOwner: recoveryOwner,
+              nonce,
+              createdAt: now()
+            });
+            try {
+              await scheduleSessionTurn.call(api.session.workflow, {
+                sessionKey: assignment.sessionKey,
+                message: buildRecoveryPacket(assignment, nonce),
+                agentId: config.managedAgentId,
+                delayMs: 0,
+                deleteAfterRun: true,
+                deliveryMode: 'announce',
+                tag: `brad-recovery:${assignment.inboundId}`
+              });
+            } catch {
+              recoveryClaims.delete(assignment.inboundId);
+              break;
+            }
+          }
+        } catch (error) {
+          api.logger?.warn?.(`Brad recovery scan failed: ${error instanceof Error ? error.message : 'unknown_error'}`);
+        } finally {
+          recoveryScanActive = false;
+        }
+      };
+
+      api.on('inbound_claim', async (event, ctx) => {
+        pruneStates();
+        const runId = runIdFrom(event, ctx);
+        if (!runId) return;
+        if (ctx?.agentId && normalizedString(ctx.agentId) !== config.managedAgentId) return;
+        const externalMessageId = boundedContextValue([event?.messageId, ctx?.messageId], 256);
+        const sessionKey = boundedContextValue([event?.sessionKey, ctx?.sessionKey], 512);
+        const conversationId = boundedContextValue(
+          [event?.conversationId, ctx?.conversationId, ctx?.chatId, ctx?.channelId, sessionKey],
+          512
+        );
+        const senderId = boundedContextValue([event?.senderId, ctx?.senderId], 256, 'unknown');
+        const next = {
+          externalMessageId,
+          sessionKey,
+          conversationId,
+          senderId,
+          senderIsOwner: event?.senderIsOwner === true || ctx?.senderIsOwner === true,
+          channel: sourceChannel(event, ctx),
+          createdAt: now()
+        };
+        const existing = inboundStates.get(runId);
+        if (
+          existing
+          && (existing.externalMessageId !== next.externalMessageId || existing.sessionKey !== next.sessionKey)
+        ) {
+          inboundStates.set(runId, { ...next, senderIsOwner: false });
+          return;
+        }
+        inboundStates.set(runId, next);
+      }, { priority: 100 });
+
+      api.on('before_model_resolve', async (event, ctx) => {
+        if (!isManagedBradRun(ctx, config)) return;
+        return modelDefaults();
+      }, { priority: 100 });
+
+      api.on('before_prompt_build', async (event, ctx) => {
+        if (!isManagedBradRun(ctx, config)) return;
+        return { prependSystemContext: BRAD_EXECUTIVE_SYSTEM_CONTEXT };
+      }, { priority: 100 });
+
+      api.on('before_agent_run', async (event, ctx) => {
+        if (!isManagedBradRun(ctx, config)) return;
+        try {
+          await claimRun(event, ctx);
+          return;
+        } catch {
+          return {
+            outcome: 'block',
+            reason: 'Brad intake was not durably claimed for an authenticated owner before model execution.',
+            message: 'Brad could not safely record this task. Please retry shortly.'
+          };
+        }
+      }, { priority: 100 });
+
+      api.on('before_agent_finalize', async (event, ctx) => {
+        await settleRun(event, ctx);
+      }, { priority: 100 });
+
+      api.on('reply_payload_sending', async (event, ctx) => {
+        if (normalizedString(event?.kind).toLowerCase() !== 'final') return;
+        const matched = findOutboundState(event, ctx);
+        if (!matched && !isManagedOutboundSession(event, ctx)) return;
+        if (matched?.state?.status === 'settled') return;
+        return {
+          cancel: true,
+          reason: 'Brad blocked an answer that was not durably settled in the control plane.'
+        };
+      }, { priority: 100 });
+
+      api.on('agent_end', async (event, ctx) => {
+        pruneStates();
+        if (!isManagedBradRun(ctx, config)) return;
+        const runId = runIdFrom(event, ctx);
+        if (!runId) return;
+        const state = runStates.get(runId);
+        if (!state) return;
+        if (!event?.success && !['settled', 'delivery_reconcile_required'].includes(state.status)) {
+          invalidateRunState(runId, state, 'run_failed');
+        }
+      }, { priority: 90 });
+
+      api.on('message_sent', async (event, ctx) => {
+        const matched = findOutboundState(event, ctx);
+        if (!matched) return;
+        const { runId, state } = matched;
+        if (state.status !== 'settled' || !state.responseDigest) return;
+        try {
+          await callGateway('thread-delivery', {
+            inboundId: state.claim.inboundId,
+            jobId: state.claim.jobId,
+            responseDigest: state.responseDigest,
+            success: event?.success === true,
+            messageId: boundedContextValue([event?.messageId], 512) || null
+          });
+          if (event?.success === true) {
+            deleteRunState(runId, state);
+            return;
+          }
+        } catch {
+          // A missing receipt is itself ambiguous; hold the run for reconciliation.
+        }
+        state.status = 'delivery_reconcile_required';
+      }, { priority: 100 });
+
+      api.on('before_tool_call', async (event, ctx) => {
+        pruneStates();
+        if (normalizedString(ctx?.agentId) !== config.managedAgentId) return;
+        const runId = runIdFrom(ctx, event);
+        const state = runId ? runStates.get(runId) : null;
+        if (state?.status === 'claimed' && event.toolName === 'exec' && commandAllowed(event.params)) return;
+        return {
+          block: true,
+          blockReason: state?.status === 'claimed'
+            ? 'Brad delegates tools through the approval-gated control plane.'
+            : 'Brad has no valid durable claim for this tool call.'
+        };
+      }, { priority: 100 });
+
+      api.on('gateway_start', async () => {
+        if (!config.recoveryEnabled) return;
+        await recoverStalled();
+        recoveryTimer = scheduleInterval(() => {
+          void recoverStalled();
+        }, RECOVERY_SCAN_INTERVAL_MS);
+        recoveryTimer?.unref?.();
+      }, { priority: 100 });
+
+      api.on('gateway_stop', () => {
+        if (recoveryTimer) {
+          cancelInterval(recoveryTimer);
+          recoveryTimer = null;
+        }
+        for (const [runId, state] of runStates) deleteRunState(runId, state);
+        inboundStates.clear();
+        recoveryClaims.clear();
+      }, { priority: 100 });
+    }
+  };
+}
+
+export default createManagedKimiPlugin();

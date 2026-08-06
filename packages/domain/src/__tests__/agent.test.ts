@@ -43,6 +43,8 @@ describe('agent operating policy', () => {
   it('redacts common credentials before content leaves the control plane', () => {
     expect(redactSensitiveText('token=abc123456789 and ghp_abcdefghijklmnopqrstuvwxyz123456'))
       .toBe('token=[REDACTED] and [REDACTED]');
+    expect(redactSensitiveText('jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdEFGHijklMNOP'))
+      .toBe('jwt=[REDACTED]');
   });
 
   it('routes full work through execution, critique, revision, and verification', () => {
