@@ -1,5 +1,7 @@
 # Architecture
 
+The multi-agent ownership layer is specified in [`MULTI_AGENT_OS.md`](./MULTI_AGENT_OS.md). Brad/Postgres is the durable controller; Kimi/OpenClaw is the executive runtime, Hermes is the bounded operator, Codex/Claude are review and build adapters, Buzz is the conversation projection, and the verifier alone settles completion.
+
 ## Components
 - Channel Gateways: SMS/WhatsApp (Twilio), Telegram (Bot API), Web.
 - Identity Service: canonical `person_id`, channel identities, auth identities.

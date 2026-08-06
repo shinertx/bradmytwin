@@ -1,4 +1,4 @@
-import { randomToken, sha256 } from '../utils/hash.js';
+import { digestPayload, randomToken, sha256 } from '../utils/hash.js';
 import { randomUUID } from 'node:crypto';
 import { query } from './db.js';
 import { redis } from './redis.js';
@@ -15,6 +15,7 @@ export interface ApprovalCreationInput {
   originChannel: string;
   originExternalUserKey: string;
   idempotencyKey: string;
+  objectiveId?: string;
 }
 
 export interface ApprovalRecord {
@@ -35,13 +36,20 @@ export class ApprovalService {
     const approvalId = randomUUID();
     const approvalToken = randomToken(24);
     const tokenHash = sha256(approvalToken);
+    const payloadDigest = digestPayload({
+      actionType: input.actionType,
+      payload: input.payload,
+      toolName: input.toolName,
+      toolInput: input.toolInput
+    });
 
     await query(
       `INSERT INTO approval_requests (
          id, person_id, action_type, payload_json, status, token_hash, expires_at,
          tool_name, tool_call_id, tool_input_json, openclaw_session_id, openclaw_response_id,
-         origin_channel, origin_external_user_key, idempotency_key, status_detail
-       ) VALUES ($1,$2,$3,$4,'PENDING',$5,now() + interval '30 minutes',$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+         origin_channel, origin_external_user_key, idempotency_key, status_detail,
+         objective_id, payload_digest, contract_version
+       ) VALUES ($1,$2,$3,$4,'PENDING',$5,now() + interval '30 minutes',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1)`,
       [
         approvalId,
         input.personId,
@@ -56,7 +64,9 @@ export class ApprovalService {
         input.originChannel,
         input.originExternalUserKey,
         input.idempotencyKey,
-        'awaiting_user_confirmation'
+        'awaiting_user_confirmation',
+        input.objectiveId ?? null,
+        payloadDigest
       ]
     );
 

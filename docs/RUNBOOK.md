@@ -12,6 +12,9 @@ docker compose -f infra/docker/docker-compose.yml up --build
 If your database was created before deep OpenClaw integration, apply:
 ```bash
 psql "$DATABASE_URL" -f infra/postgres/init/002_deep_openclaw.sql
+psql "$DATABASE_URL" -f infra/postgres/init/005_brad_ownership_kernel.sql
+psql "$DATABASE_URL" -f infra/postgres/init/006_kernel_slice_1.sql
+psql "$DATABASE_URL" -f infra/postgres/init/009_agent_conductor.sql
 ```
 
 ## GCP VM deploy
@@ -38,3 +41,16 @@ psql "$DATABASE_URL" -f infra/postgres/init/002_deep_openclaw.sql
 - Disable unverified web access fast: set `BETA_ALLOW_UNVERIFIED_WEB=false` and restart API.
 - Hard-stop all write actions: set `BETA_KILL_SWITCH_WRITES=true` and restart API.
 - Keep write approval pressure high: set `BETA_STRICT_APPROVALS=true`.
+
+## Multi-agent rollout
+
+1. Set `BRAD_CONDUCTOR_MODE=shadow` on API and worker.
+2. Apply migrations `005`, `006`, and `009`; build and restart.
+3. Verify ordinary Telegram and web responses still occur exactly once.
+4. Confirm Redis Stream `brad:agent:jobs` receives one wakeup for a new outbox record and that a duplicate wakeup cannot re-run a settled job.
+5. Start `@brad/buzz-bridge` on the Mac through the existing API tunnel. Keep its token outside Git and its Buzz private key in the existing protected key file.
+6. Link Kimi to this existing OpenClaw runtime through `kimi.com/bot`; back up the OpenClaw config first and retain the current model profile as rollback.
+7. Run the runtime, conversation, restart, loop, safety, reconciliation, and two-person isolation canaries.
+8. Set `BRAD_CONDUCTOR_MODE=active` only after the documented promotion threshold passes.
+
+Immediate rollback: set `BRAD_CONDUCTOR_MODE=shadow` and restart API/worker. Do not delete agent tables; they are the recovery and audit record.

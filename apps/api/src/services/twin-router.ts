@@ -14,6 +14,7 @@ import { PersonService } from './person-service.js';
 import { RuntimeService } from './runtime-service.js';
 import { ToolInvocationService } from './tool-invocation-service.js';
 import { ToolRegistryService } from './tool-registry-service.js';
+import { AgentConductorService } from './agent-conductor-service.js';
 import { normalizePhoneE164Candidate } from '../utils/phone.js';
 
 const personService = new PersonService();
@@ -26,6 +27,7 @@ const lockService = new LockService();
 const modelProfileService = new ModelProfileService();
 const toolRegistry = new ToolRegistryService();
 const toolInvocationService = new ToolInvocationService();
+const agentConductor = new AgentConductorService();
 const openclaw = new OpenClawClient(env.OPENCLAW_URL, env.OPENCLAW_API_KEY, {
   mode: env.OPENCLAW_MODE,
   cliBin: env.OPENCLAW_CLI_BIN,
@@ -38,6 +40,8 @@ interface RouterReply {
   pendingApprovals?: Array<{ id: string; actionType: string }>;
   runId?: string;
   sessionId?: string;
+  agentThreadId?: string;
+  objectiveId?: string;
 }
 
 export class TwinRouter {
@@ -172,6 +176,25 @@ export class TwinRouter {
     }
 
     try {
+      const agentIntake = await agentConductor.intake({
+        personId,
+        sourceMessageId: inboundMessageId,
+        text,
+        sourceChannel: channel,
+        sessionKey: `${channel}:${externalUserKey}`
+      });
+
+      if (agentIntake?.mode === 'active') {
+        const response = `I took ownership of this request. Objective ${agentIntake.objectiveId} is queued and will only close with evidence or a precise blocker.`;
+        await this.sendAndPersist(personId, channel, externalUserKey, response);
+        return {
+          text: response,
+          runId: inboundMessageId,
+          agentThreadId: agentIntake.threadId,
+          objectiveId: agentIntake.objectiveId
+        };
+      }
+
       const policy = await personService.getPermissionPolicy(personId);
       const connectorRefs = await connectorService.listConnectorRefs(personId);
       const skills = await personService.listSkills(personId);
@@ -322,7 +345,8 @@ export class TwinRouter {
               openclawResponseId: turn.responseId,
               originChannel: channel,
               originExternalUserKey: externalUserKey,
-              idempotencyKey
+              idempotencyKey,
+              objectiveId: agentIntake?.objectiveId
             });
 
             await toolInvocationService.log({
@@ -442,7 +466,9 @@ export class TwinRouter {
         text: assistant,
         pendingApprovals,
         runId,
-        sessionId
+        sessionId,
+        agentThreadId: agentIntake?.threadId,
+        objectiveId: agentIntake?.objectiveId
       };
     } finally {
       await lockService.release(personId);

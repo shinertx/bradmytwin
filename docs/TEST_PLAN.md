@@ -1,5 +1,24 @@
 # Test Plan
 
+## Multi-agent conductor
+
+- Full-depth route: Brad/Kimi → Hermes → Codex/Claude critique → Hermes revision → verifier.
+- Light-depth route: Brad/Kimi → Hermes → verifier.
+- Verifier cannot close with empty evidence.
+- Eight consecutive agent turns stop before a ninth runner call.
+- Owner follow-up resets the turn budget.
+- Expired pre-run leases requeue; expired running turns require reconciliation.
+- Buzz reply ingestion rejects wrong job, wrong agent, duplicate event, and unauthenticated bridge requests.
+- Two people cannot list, stream, update, pause, resume, cancel, or reply to each other's threads.
+- Ambiguous external effects are quarantined and never replayed automatically.
+- An owner pause during an active turn prevents the late result from being committed.
+- A blocked thread resumes by creating one new durable executive job when no runnable job exists.
+- One transactional outbox record produces one Redis Stream wakeup; repeated publishing does not create another event.
+- Telegram status briefs require a provider message receipt; ambiguous sends enter reconciliation.
+- A JENNI prompt is blocked before any runner call.
+- Secret-like text is redacted from external conversation projections.
+- Artifact verification fails after the artifact bytes are changed without updating the claimed digest.
+
 ## Unit
 - Onboarding transitions.
 - Permission helper behavior.

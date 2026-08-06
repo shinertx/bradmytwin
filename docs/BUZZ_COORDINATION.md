@@ -53,7 +53,7 @@ an API response is not customer-live; a payment submission is not settled.
 - Keep one private **Brad Control Room** for cross-agent coordination and owner decisions.
 - Create separate project rooms only when a project needs independent access, history, or retention.
 - Tag the responsible worker in a request. Do not broadcast every message to every agent.
-- Agents respond to owner messages only unless an explicit allowlist is configured.
+- Agents respond to owner messages or exact Brad Conductor assignments only. The Mac bridge binds each accepted reply to the waiting job, expected agent identity, and Buzz event.
 - Do not copy credentials, tokens, full private records, or sensitive personal data into Buzz.
 - Avoid acknowledgement loops. A reply must contain a decision, evidence, blocker, or next action.
 
@@ -101,8 +101,7 @@ Do not call the full system "working" when only the relay or desktop UI is up.
 
 ## Buzz Release Alignment
 
-- Buzz Desktop is pinned to the latest official release verified on 2026-08-01:
-  `0.5.3`.
+- Production requires Buzz Desktop `0.5.5` or newer after identity backup and a signed canary. `0.5.3` is the observed baseline, not the promotion target.
 - The local Buzz source checkout is clean and synchronized with `origin/main`;
   do not replace the signed Desktop app with an untagged development build.
 - Keep reply/liveness protection enabled where the selected harness supports it.
