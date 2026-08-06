@@ -6,7 +6,7 @@ export interface PolicyContext {
 }
 
 export function isWriteAction(actionType: WriteActionType): boolean {
-  return ['SEND_EMAIL', 'CREATE_EVENT', 'UPDATE_EVENT', 'SUBMIT_FORM'].includes(actionType);
+  return ['SEND_EMAIL', 'CREATE_EVENT', 'UPDATE_EVENT', 'SUBMIT_FORM', 'PLACE_PHONE_CALL'].includes(actionType);
 }
 
 export function canExecuteRead(policy: PolicyContext): boolean {

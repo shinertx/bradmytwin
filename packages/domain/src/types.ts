@@ -11,7 +11,8 @@ export type WriteActionType =
   | 'SEND_EMAIL'
   | 'CREATE_EVENT'
   | 'UPDATE_EVENT'
-  | 'SUBMIT_FORM';
+  | 'SUBMIT_FORM'
+  | 'PLACE_PHONE_CALL';
 
 export interface Person {
   id: string;
@@ -63,5 +64,45 @@ export interface OpenClawResponse {
   assistantText: string;
   toolRequests: ToolRequest[];
   toolResults?: Record<string, unknown>[];
+  error?: string;
+}
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface OpenClawToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface OpenClawToolOutput {
+  callId: string;
+  output: Record<string, unknown>;
+}
+
+export interface OpenClawTurnInput {
+  runId: string;
+  sessionId: string;
+  userId: string;
+  inputText?: string;
+  previousResponseId?: string;
+  toolOutputs?: OpenClawToolOutput[];
+  tools: ToolDefinition[];
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface OpenClawTurnResult {
+  runId: string;
+  sessionId: string;
+  responseId: string;
+  assistantText: string;
+  toolCalls: OpenClawToolCall[];
   error?: string;
 }

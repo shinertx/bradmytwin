@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="icon" href="data:," />
     <title>BuddyClaw</title>
     <script src="/config.js"></script>
     <style>
@@ -43,7 +44,7 @@
       .card h2 { margin: 0 0 8px; font-size: 18px; font-family: "Space Grotesk", sans-serif; }
       .muted { color: var(--muted); }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-word; color: #223041; }
-      input, textarea, button {
+      input, textarea, button, select {
         width: 100%;
         border-radius: 10px;
         border: 1px solid #bcc5d3;
@@ -63,6 +64,14 @@
       button.light { background: #fff; color: var(--ink); border: 1px solid var(--line); }
       .row { display: flex; gap: 8px; }
       .row > * { flex: 1; }
+      .tower { margin-top: 16px; display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+      .metric { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 12px; }
+      .metric strong { display: block; font-size: 24px; font-family: "Space Grotesk", sans-serif; }
+      .list { display: grid; gap: 8px; max-height: 320px; overflow: auto; }
+      .item { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
+      .itemTop { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+      .tag { border-radius: 999px; padding: 3px 8px; font-size: 11px; color: #18304a; background: #eef4fb; white-space: nowrap; }
+      .danger { color: #9d2727; }
       #authState, #connectorState { margin-top: 8px; }
       #chatLog {
         max-height: 320px;
@@ -72,6 +81,36 @@
         background: #fff;
         padding: 8px;
       }
+      .agent-room { margin-top: 16px; }
+      .agent-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+      .agent-toolbar h2 { margin: 0; }
+      .agent-actions { display: flex; gap: 8px; }
+      .agent-actions button { width: auto; margin: 0; padding: 8px 12px; }
+      .agent-layout { display: grid; grid-template-columns: minmax(190px, 0.32fr) minmax(0, 1fr); border: 1px solid var(--line); min-height: 420px; }
+      .agent-threads { border-right: 1px solid var(--line); background: #f7f9fc; overflow-y: auto; max-height: 540px; }
+      .agent-thread { width: 100%; margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--ink); text-align: left; padding: 12px; }
+      .agent-thread.active { background: #eaf2ff; box-shadow: inset 3px 0 0 var(--accent); }
+      .agent-thread strong, .agent-thread small { display: block; }
+      .agent-thread small { color: var(--muted); margin-top: 4px; }
+      .agent-conversation { display: flex; flex-direction: column; min-width: 0; }
+      .agent-meta { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+      .status-pill { border: 1px solid var(--line); padding: 3px 7px; font-size: 11px; font-weight: 600; background: #fff; }
+      .agent-turns { flex: 1; min-height: 300px; max-height: 430px; overflow-y: auto; padding: 12px; background: #fff; }
+      .agent-turn { border-left: 3px solid #9ba8ba; padding: 8px 10px; margin-bottom: 10px; background: #f8fafc; }
+      .agent-turn[data-agent="brad-kimi"] { border-color: #0a6bff; }
+      .agent-turn[data-agent="hermes"] { border-color: #1f9f89; }
+      .agent-turn[data-agent="codex"] { border-color: #7257d5; }
+      .agent-turn[data-agent="claude"] { border-color: #b45f38; }
+      .agent-turn[data-agent="verifier"] { border-color: #24763b; }
+      .agent-turn-head { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; margin-bottom: 5px; }
+      .agent-turn-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .reasoning-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+      .reasoning-item { min-width: 0; }
+      .reasoning-item strong { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; margin-bottom: 2px; }
+      .reasoning-item span { display: block; overflow-wrap: anywhere; }
+      .agent-compose { border-top: 1px solid var(--line); padding: 10px; display: flex; gap: 8px; }
+      .agent-compose input { flex: 1; }
+      .agent-compose button { width: auto; margin: 0; }
       .msg { margin: 8px 0; padding: 8px; border-radius: 8px; }
       .in { background: #eaf2ff; }
       .out { background: #f3fbf8; }
@@ -85,6 +124,11 @@
       }
       @media (max-width: 700px) {
         .brand { font-size: 27px; }
+        .tower { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+        .row { flex-direction: column; }
+        .agent-layout { grid-template-columns: 1fr; }
+        .agent-threads { border-right: 0; border-bottom: 1px solid var(--line); max-height: 150px; }
+        .reasoning-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -109,12 +153,12 @@
           <p class="muted">Start instantly with Google, or use phone OTP as fallback.</p>
           <button id="loginGoogle" class="success">Continue with Google</button>
           <p class="muted" style="margin: 14px 0 4px;">Use phone instead</p>
-          <input id="phone" placeholder="+15551234567" />
+          <input id="phone" placeholder="+15551234567" autocomplete="tel" inputmode="tel" />
           <div class="row">
             <button id="startOtp" class="secondary">Send OTP</button>
             <button id="verifyOtp">Verify and Sign In</button>
           </div>
-          <input id="otp" placeholder="6-digit code" />
+          <input id="otp" placeholder="6-digit code" autocomplete="one-time-code" inputmode="numeric" />
           <p id="authState" class="mono"></p>
         </section>
       </section>
@@ -140,11 +184,91 @@
           </section>
         </div>
 
+        <div class="tower" id="towerMetrics"></div>
+
+        <div class="shell" style="margin-top: 16px;">
+          <section class="card">
+            <h2>Today</h2>
+            <div id="todayList" class="list"></div>
+          </section>
+          <section class="card">
+            <h2>Waiting</h2>
+            <div id="waitingList" class="list"></div>
+          </section>
+          <section class="card">
+            <h2>Inbox Signals</h2>
+            <div id="signalList" class="list"></div>
+          </section>
+        </div>
+
+        <div class="shell" style="margin-top: 16px;">
+          <section class="card">
+            <h2>Add Signal</h2>
+            <div class="row">
+              <select id="signalSource">
+                <option>EMAIL</option>
+                <option>SMS</option>
+                <option>CALENDAR</option>
+                <option>PORTAL</option>
+                <option>DRIVE</option>
+                <option>MANUAL</option>
+              </select>
+              <input id="signalSender" placeholder="Sender" />
+            </div>
+            <input id="signalSubject" placeholder="Subject" />
+            <textarea id="signalBody" rows="4" placeholder="Paste email, SMS, portal note, or reminder"></textarea>
+            <button id="ingestSignal" class="success">Add to Control Tower</button>
+            <p id="signalState" class="mono"></p>
+          </section>
+          <section class="card">
+            <h2>Add Source Record</h2>
+            <div class="row">
+              <select id="sourceType">
+                <option>PERSON</option>
+                <option>ENTITY</option>
+                <option>ACCOUNT</option>
+                <option>CASE</option>
+                <option>VENDOR</option>
+                <option>PROPERTY</option>
+                <option>PREFERENCE</option>
+                <option>DEADLINE</option>
+                <option>OTHER</option>
+              </select>
+              <select id="sourceConfidence">
+                <option>UNVERIFIED</option>
+                <option>USER_ATTESTED</option>
+                <option>SOURCE_BACKED</option>
+              </select>
+            </div>
+            <input id="sourceTitle" placeholder="Title" />
+            <textarea id="sourceSummary" rows="3" placeholder="Operating truth or proof note"></textarea>
+            <button id="addSourceRecord" class="secondary">Save Source Record</button>
+            <p id="sourceState" class="mono"></p>
+          </section>
+          <section class="card">
+            <h2>Monitors</h2>
+            <div class="row">
+              <select id="monitorType">
+                <option>EMAIL</option>
+                <option>SMS</option>
+                <option>CALENDAR</option>
+                <option>DRIVE</option>
+                <option>TASKS</option>
+                <option>PORTAL</option>
+                <option>SYSTEM</option>
+              </select>
+              <input id="monitorName" placeholder="Monitor name" />
+            </div>
+            <button id="addMonitor" class="secondary">Activate Monitor</button>
+            <div id="monitorList" class="list" style="margin-top: 10px;"></div>
+          </section>
+        </div>
+
         <div class="shell" style="margin-top: 16px;">
           <section class="card">
             <h2>Web Chat</h2>
             <div id="chatLog"></div>
-            <textarea id="chatInput" rows="3" placeholder="Message your twin"></textarea>
+            <textarea id="chatInput" rows="3" placeholder="Message your twin" autocomplete="off"></textarea>
             <button id="sendChat">Send</button>
           </section>
           <section class="card">
@@ -152,7 +276,33 @@
             <button id="loadApprovals" class="secondary">Refresh Approvals</button>
             <div id="approvals" class="mono"></div>
           </section>
+          <section class="card">
+            <h2>System Health</h2>
+            <div id="systemHealth" class="mono"></div>
+          </section>
         </div>
+        <section class="card agent-room">
+          <div class="agent-toolbar">
+            <h2>Agent Room</h2>
+            <div class="agent-actions">
+              <button id="agentPause" class="light">Pause</button>
+              <button id="agentResume" class="light">Resume</button>
+              <button id="agentCancel" class="light">Cancel</button>
+              <button id="agentRefresh" class="secondary">Refresh</button>
+            </div>
+          </div>
+          <div class="agent-layout">
+            <div id="agentThreads" class="agent-threads"></div>
+            <div class="agent-conversation">
+              <div id="agentMeta" class="agent-meta"></div>
+              <div id="agentTurns" class="agent-turns"></div>
+              <div class="agent-compose">
+                <input id="agentFollowup" placeholder="Reply to this objective" autocomplete="off" />
+                <button id="agentSend">Send</button>
+              </div>
+            </div>
+          </div>
+        </section>
       </section>
     </div>
 
@@ -160,6 +310,8 @@
       const api = window.__BRAD_CONFIG__.API_BASE_URL;
       let token = localStorage.getItem('brad_token') || '';
       let streamBusy = false;
+      let selectedAgentThread = '';
+      let selectedAgentStatus = '';
 
       const loginShell = document.getElementById('loginShell');
       const appShell = document.getElementById('appShell');
@@ -169,13 +321,31 @@
       const connectorState = document.getElementById('connectorState');
       const chatLog = document.getElementById('chatLog');
       const phoneBanner = document.getElementById('phoneBanner');
+      const towerMetrics = document.getElementById('towerMetrics');
+      const todayList = document.getElementById('todayList');
+      const waitingList = document.getElementById('waitingList');
+      const signalList = document.getElementById('signalList');
+      const monitorList = document.getElementById('monitorList');
+      const systemHealth = document.getElementById('systemHealth');
+      const agentThreads = document.getElementById('agentThreads');
+      const agentMeta = document.getElementById('agentMeta');
+      const agentTurns = document.getElementById('agentTurns');
 
       function setState(el, text) { el.textContent = text; }
       function authHeader() { return token ? { Authorization: `Bearer ${token}` } : {}; }
+      function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;'
+        }[char]));
+      }
 
       async function call(path, options = {}) {
         const headers = {
-          'Content-Type': 'application/json',
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
           ...(options.headers || {}),
           ...authHeader()
         };
@@ -207,6 +377,7 @@
         }
         setState(meState, JSON.stringify(out.data, null, 2));
         phoneBanner.classList.toggle('hidden', Boolean(out.data.phoneVerified));
+        await refreshDashboard();
       }
 
       document.getElementById('loginGoogle').onclick = () => {
@@ -263,6 +434,140 @@
         if (!text) return;
         await call('/web/chat/messages', { method: 'POST', body: JSON.stringify({ text }) });
         document.getElementById('chatInput').value = '';
+        await refreshDashboard();
+      };
+
+      function renderTaskList(el, tasks) {
+        if (!tasks?.length) {
+          el.innerHTML = '<p class="muted">Clear.</p>';
+          return;
+        }
+        el.innerHTML = tasks.map((task) => `
+          <div class="item">
+            <div class="itemTop">
+              <strong>${escapeHtml(task.title)}</strong>
+              <span class="tag">${escapeHtml(task.priority)}</span>
+            </div>
+            <div class="muted">${escapeHtml(task.category)}${task.waiting_on ? ` · waiting on ${escapeHtml(task.waiting_on)}` : ''}</div>
+            ${task.notes ? `<div class="mono">${escapeHtml(task.notes)}</div>` : ''}
+            <button class="light" data-complete-task="${escapeHtml(task.id)}">Done</button>
+          </div>
+        `).join('');
+      }
+
+      function renderSignals(signals) {
+        if (!signals?.length) {
+          signalList.innerHTML = '<p class="muted">No signals yet.</p>';
+          return;
+        }
+        signalList.innerHTML = signals.map((signal) => `
+          <div class="item">
+            <div class="itemTop">
+              <strong>${escapeHtml(signal.subject || signal.sender || signal.source_type)}</strong>
+              <span class="tag">${escapeHtml(signal.classification)}</span>
+            </div>
+            <div class="muted">${escapeHtml(signal.source_type)} · ${escapeHtml(signal.priority)}</div>
+            <div>${escapeHtml(signal.body_preview)}</div>
+          </div>
+        `).join('');
+      }
+
+      function renderMonitors(monitors) {
+        if (!monitors?.length) {
+          monitorList.innerHTML = '<p class="muted">No monitors active.</p>';
+          return;
+        }
+        monitorList.innerHTML = monitors.map((monitor) => `
+          <div class="item">
+            <div class="itemTop">
+              <strong>${escapeHtml(monitor.name)}</strong>
+              <span class="tag">${escapeHtml(monitor.status)}</span>
+            </div>
+            <div class="muted">${escapeHtml(monitor.monitor_type)} · every ${escapeHtml(monitor.cadence_minutes)} min</div>
+            ${monitor.last_error ? `<div class="danger">${escapeHtml(monitor.last_error)}</div>` : ''}
+          </div>
+        `).join('');
+      }
+
+      async function refreshDashboard() {
+        if (!token) return;
+        const out = await call('/ea/dashboard', { method: 'GET' });
+        if (!out.ok) return;
+        const data = out.data;
+        towerMetrics.innerHTML = [
+          ['Open Tasks', data.summary.openTasks],
+          ['New Signals', data.summary.newSignals],
+          ['Approvals', data.summary.pendingApprovals],
+          ['Monitors', data.summary.activeMonitors]
+        ].map(([label, value]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span class="muted">${escapeHtml(label)}</span></div>`).join('');
+        renderTaskList(todayList, data.today);
+        renderTaskList(waitingList, data.waiting);
+        renderSignals(data.signals);
+        renderMonitors(data.monitors);
+        systemHealth.textContent = JSON.stringify(data.system, null, 2);
+      }
+
+      document.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const taskId = target.dataset.completeTask;
+        if (!taskId) return;
+        await call(`/ea/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify({ status: 'DONE' }) });
+        await refreshDashboard();
+      });
+
+      document.getElementById('ingestSignal').onclick = async () => {
+        const bodyPreview = document.getElementById('signalBody').value.trim();
+        if (!bodyPreview) return;
+        const out = await call('/ea/signals', {
+          method: 'POST',
+          body: JSON.stringify({
+            sourceType: document.getElementById('signalSource').value,
+            sender: document.getElementById('signalSender').value.trim() || undefined,
+            subject: document.getElementById('signalSubject').value.trim() || undefined,
+            bodyPreview
+          })
+        });
+        document.getElementById('signalState').textContent = JSON.stringify(out.data, null, 2);
+        if (out.ok) {
+          document.getElementById('signalBody').value = '';
+          document.getElementById('signalSubject').value = '';
+          await refreshDashboard();
+        }
+      };
+
+      document.getElementById('addSourceRecord').onclick = async () => {
+        const title = document.getElementById('sourceTitle').value.trim();
+        if (!title) return;
+        const out = await call('/ea/source-records', {
+          method: 'POST',
+          body: JSON.stringify({
+            recordType: document.getElementById('sourceType').value,
+            confidence: document.getElementById('sourceConfidence').value,
+            title,
+            summary: document.getElementById('sourceSummary').value.trim() || undefined
+          })
+        });
+        document.getElementById('sourceState').textContent = JSON.stringify(out.data, null, 2);
+        if (out.ok) {
+          document.getElementById('sourceTitle').value = '';
+          document.getElementById('sourceSummary').value = '';
+          await refreshDashboard();
+        }
+      };
+
+      document.getElementById('addMonitor').onclick = async () => {
+        const name = document.getElementById('monitorName').value.trim();
+        if (!name) return;
+        await call('/ea/monitors', {
+          method: 'POST',
+          body: JSON.stringify({
+            monitorType: document.getElementById('monitorType').value,
+            name
+          })
+        });
+        document.getElementById('monitorName').value = '';
+        await refreshDashboard();
       };
 
       async function refreshChat() {
@@ -285,7 +590,7 @@
               if (!line) continue;
               try {
                 const messages = JSON.parse(line.slice(6));
-                chatLog.innerHTML = messages.map((m) => `<div class="msg ${m.direction === 'INBOUND' ? 'in' : 'out'}"><strong>${m.direction}</strong> (${m.channel})<br>${m.body}</div>`).join('');
+                chatLog.innerHTML = messages.map((m) => `<div class="msg ${m.direction === 'INBOUND' ? 'in' : 'out'}"><strong>${escapeHtml(m.direction)}</strong> (${escapeHtml(m.channel)})<br>${escapeHtml(m.body)}</div>`).join('');
                 chatLog.scrollTop = chatLog.scrollHeight;
               } catch {}
             }
@@ -312,13 +617,110 @@
         if (out.ok && out.data.authUrl) window.open(out.data.authUrl, '_blank');
       };
 
+      function agentName(id) {
+        return ({ 'brad-kimi': 'Brad', hermes: 'Hermes', codex: 'Codex', claude: 'Claude', verifier: 'Verifier', owner: 'Ben', system: 'Conductor' })[id] || id;
+      }
+
+      function agentBody(message) {
+        if (message.message_type !== 'FIRST_PRINCIPLES') return escapeHtml(message.body);
+        let brief = message.metadata_json && message.metadata_json.brief;
+        if (!brief) {
+          try { brief = JSON.parse(message.body); } catch { return escapeHtml(message.body); }
+        }
+        const fields = [
+          ['Goal', brief.objective],
+          ['Constraint', brief.bindingConstraint],
+          ['Assumption', brief.hiddenAssumption],
+          ['Plan', brief.candidate],
+          ['Red-team', brief.strongestAttack],
+          ['Repair', brief.repair],
+          ['Proof', brief.decisiveTest]
+        ];
+        return `<div class="reasoning-grid">${fields.map(([label, value]) => `
+          <div class="reasoning-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`).join('')}</div>`;
+      }
+
+      function updateAgentActions() {
+        const terminal = ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(selectedAgentStatus);
+        document.getElementById('agentPause').disabled = !selectedAgentThread || terminal || selectedAgentStatus === 'PAUSED';
+        document.getElementById('agentResume').disabled = !selectedAgentThread || terminal || !['PAUSED', 'BLOCKED', 'WAITING', 'WAITING_VERIFICATION'].includes(selectedAgentStatus);
+        document.getElementById('agentCancel').disabled = !selectedAgentThread || terminal;
+      }
+
+      async function loadAgentThread(id) {
+        if (!id) return;
+        const out = await call(`/agent/threads/${id}`, { method: 'GET' });
+        if (!out.ok) return;
+        selectedAgentThread = id;
+        const thread = out.data.thread;
+        selectedAgentStatus = thread.status;
+        agentMeta.innerHTML = [
+          `<span class="status-pill">${escapeHtml(thread.status)}</span>`,
+          `<span class="status-pill">${escapeHtml(thread.reasoning_depth)}</span>`,
+          `<span class="status-pill">${escapeHtml(thread.phase)}</span>`,
+          thread.blocker_code ? `<span class="status-pill">${escapeHtml(thread.blocker_code)}</span>` : ''
+        ].join('');
+        agentTurns.innerHTML = out.data.messages.map((message) => `
+          <article class="agent-turn" data-agent="${escapeHtml(message.sender_agent_id)}">
+            <div class="agent-turn-head">
+              <strong>${escapeHtml(agentName(message.sender_agent_id))} · ${escapeHtml(message.message_type)}</strong>
+              <span>${escapeHtml(new Date(message.created_at).toLocaleString())}</span>
+            </div>
+            <div class="agent-turn-body">${agentBody(message)}</div>
+          </article>`).join('');
+        agentTurns.scrollTop = agentTurns.scrollHeight;
+        updateAgentActions();
+        await refreshAgentThreads();
+      }
+
+      async function refreshAgentThreads() {
+        if (!token) return;
+        const out = await call('/agent/threads', { method: 'GET' });
+        if (!out.ok) return;
+        const threads = out.data.threads || [];
+        if (!selectedAgentThread && threads[0]) selectedAgentThread = threads[0].id;
+        agentThreads.innerHTML = threads.map((thread) => `
+          <button class="agent-thread ${thread.id === selectedAgentThread ? 'active' : ''}" data-thread-id="${escapeHtml(thread.id)}">
+            <strong>${escapeHtml(thread.current_assignment)}</strong>
+            <small>${escapeHtml(thread.status)} · ${escapeHtml(thread.reasoning_depth)}</small>
+          </button>`).join('');
+        agentThreads.querySelectorAll('[data-thread-id]').forEach((button) => {
+          button.onclick = () => loadAgentThread(button.dataset.threadId);
+        });
+      }
+
+      async function agentAction(action) {
+        if (!selectedAgentThread) return;
+        await call(`/agent/threads/${selectedAgentThread}/${action}`, { method: 'POST' });
+        await loadAgentThread(selectedAgentThread);
+      }
+      document.getElementById('agentPause').onclick = () => agentAction('pause');
+      document.getElementById('agentResume').onclick = () => agentAction('resume');
+      document.getElementById('agentCancel').onclick = () => agentAction('cancel');
+      document.getElementById('agentRefresh').onclick = () => selectedAgentThread ? loadAgentThread(selectedAgentThread) : refreshAgentThreads();
+      document.getElementById('agentSend').onclick = async () => {
+        const input = document.getElementById('agentFollowup');
+        const text = input.value.trim();
+        if (!selectedAgentThread || !text) return;
+        const out = await call(`/agent/threads/${selectedAgentThread}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+        if (out.ok) input.value = '';
+        await loadAgentThread(selectedAgentThread);
+      };
+      updateAgentActions();
+
       renderAuthShell();
       if (token) {
         refreshMe();
         refreshChat();
+        refreshDashboard();
+        refreshAgentThreads().then(() => selectedAgentThread && loadAgentThread(selectedAgentThread));
       }
       setInterval(() => {
         refreshChat();
+        refreshDashboard();
+      }, 5000);
+      setInterval(() => {
+        if (selectedAgentThread) loadAgentThread(selectedAgentThread);
       }, 5000);
     </script>
   </body>

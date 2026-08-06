@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { ApprovalService } from '../services/approval-service.js';
-import { query } from '../services/db.js';
 
 const approvalService = new ApprovalService();
 
@@ -12,12 +11,7 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: 'approval_not_found_or_expired' });
     }
 
-    await query('UPDATE approval_requests SET status = $2, updated_at = now() WHERE id = $1', [
-      decided.id,
-      'APPROVED'
-    ]);
-
-    return reply.send({ ok: true, approvalId: decided.id });
+    return reply.send({ ok: true, approvalId: decided.id, executionState: 'QUEUED' as const });
   });
 
   app.post('/approvals/:token/reject', async (req, reply) => {
@@ -27,12 +21,25 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: 'approval_not_found_or_expired' });
     }
 
-    return reply.send({ ok: true, approvalId: decided.id });
+    return reply.send({ ok: true, approvalId: decided.id, executionState: 'FAILED' as const });
   });
 
   app.get('/approvals', { preHandler: [app.authenticate] }, async (req, reply) => {
     const user = req.user as { personId: string };
-    const approvals = await approvalService.listPendingByPerson(user.personId);
-    return reply.send({ approvals });
+    const approvals = await approvalService.listByPerson(user.personId);
+    return reply.send({
+      approvals: approvals.map((approval) => ({
+        id: approval.id,
+        person_id: approval.person_id,
+        action_type: approval.action_type,
+        status: approval.status,
+        status_detail: approval.status_detail,
+        tool_name: approval.tool_name,
+        tool_input_preview: approval.tool_input_json,
+        origin_channel: approval.origin_channel,
+        payload_json: approval.payload_json,
+        created_at: approval.created_at
+      }))
+    });
   });
 }

@@ -12,6 +12,7 @@ const envBool = z.preprocess((value) => {
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  HOST: z.string().default('127.0.0.1'),
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().default('postgres://postgres:postgres@postgres:5432/brad'),
   REDIS_URL: z.string().default('redis://redis:6379'),
@@ -21,7 +22,7 @@ const schema = z.object({
   BETA_ALLOW_UNVERIFIED_WEB: envBool.default(false),
   BETA_STRICT_APPROVALS: envBool.default(true),
   BETA_KILL_SWITCH_WRITES: envBool.default(false),
-  OPENCLAW_MODE: z.enum(['stub', 'http', 'cli']).default('stub'),
+  OPENCLAW_MODE: z.enum(['stub', 'http', 'cli']).default('http'),
   OPENCLAW_URL: z.string().optional(),
   OPENCLAW_API_KEY: z.string().optional(),
   OPENCLAW_CLI_BIN: z.string().default('openclaw'),
@@ -29,10 +30,20 @@ const schema = z.object({
   OPENCLAW_CLI_TIMEOUT_MS: z.coerce.number().default(90000),
   OPENCLAW_MODEL_DEFAULT: z.string().default('gpt-4.1'),
   OPENCLAW_MODEL_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),
+  DEFAULT_TIMEZONE: z.string().default('America/Chicago'),
+  CALLE_CLI_BIN: z.string().optional(),
+  CALLE_TIMEOUT_SECONDS: z.coerce.number().default(30),
+  CALLE_TELEMETRY: envBool.default(false),
+  BRAD_CONDUCTOR_MODE: z.enum(['off', 'shadow', 'active']).default('shadow'),
+  BRAD_AGENT_MAX_TURNS: z.coerce.number().int().min(1).max(32).default(8),
+  BRAD_AGENT_MAX_COST_MICROS: z.coerce.number().int().positive().default(5_000_000),
+  BRAD_AGENT_BRIDGE_TOKEN: z.string().min(24).optional(),
   TWILIO_ACCOUNT_SID: z.string().optional(),
   TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_FROM_NUMBER: z.string().optional(),
   TWILIO_SMS_FROM: z.string().optional(),
   TWILIO_WHATSAPP_FROM: z.string().optional(),
+  TWILIO_VOICE_FROM: z.string().optional(),
   META_WHATSAPP_ACCESS_TOKEN: z.string().optional(),
   META_WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
   META_WHATSAPP_WABA_ID: z.string().optional(),
@@ -49,4 +60,9 @@ const schema = z.object({
   BROWSER_ALLOWLIST: z.string().default('example.com')
 });
 
-export const env = schema.parse(process.env);
+const parsed = schema.parse(process.env);
+
+export const env = {
+  ...parsed,
+  TWILIO_SMS_FROM: parsed.TWILIO_SMS_FROM ?? parsed.TWILIO_FROM_NUMBER
+};

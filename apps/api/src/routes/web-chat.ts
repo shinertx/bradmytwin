@@ -31,7 +31,15 @@ export async function webChatRoutes(app: FastifyInstance): Promise<void> {
       metadata: { source: 'web' }
     });
 
-    return reply.send({ ok: true, reply: result.text });
+    return reply.send({
+      ok: true,
+      reply: result.text,
+      pendingApprovals: result.pendingApprovals ?? [],
+      runId: result.runId ?? null,
+      sessionId: result.sessionId ?? null,
+      agentThreadId: result.agentThreadId ?? null,
+      objectiveId: result.objectiveId ?? null
+    });
   });
 
   app.get('/web/chat/stream', { preHandler: [app.authenticate] }, async (req, reply) => {
@@ -40,6 +48,10 @@ export async function webChatRoutes(app: FastifyInstance): Promise<void> {
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
+    if (req.headers.origin) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+      reply.raw.setHeader('Vary', 'Origin');
+    }
 
     const sendSnapshot = async (): Promise<void> => {
       const messages = await messageService.listByPerson(user.personId, 100);

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "mode": "shadow",
+  "direction": "canonical_to_linear",
+  "writesEnabled": false,
+  "canonicalManifest": "/Users/benjijmac/workspace-audits/NON_JENNI_TASK_RECONCILIATION_2026-08-03.json",
+  "linear": {
+    "team": {
+      "id": "6d86a108-a105-4c40-98d4-d736c37d9f0a",
+      "name": "Brad"
+    },
+    "project": {
+      "id": "18f0f6f2-60ae-49fb-a632-1e82e761f5cf",
+      "name": "Brad Non-JENNI Operating Queue"
+    },
+    "readbackScope": "reconciliation_id_only",
+    "reconciliationIdPrefix": "Reconciliation ID: "
+  },
+  "identity": {
+    "sourceField": "id",
+    "immutable": true,
+    "expectedSourceCount": 40,
+    "expectedProjectedCount": 35,
+    "expectedParkedCount": 5,
+    "sourceIdSetSha256": "4f5fdfd236909582f48c43d5fd7761e72d136086212a6250fe7352153bc747cd",
+    "projectedIdSetSha256": "33443b1c41e56b3165b32b52979f0ef56e2cd7c02eac3cfd0ed0bfe4c46cc792",
+    "parkedIdSetSha256": "f77618eda893ae0a406ffa0eba8471d4077beb98c3bd3e005d0ab6e386af4a00"
+  },
+  "jenniExclusion": {
+    "required": true,
+    "expectedExcludedCandidateCount": 612,
+    "blockedTerms": [
+      "jenni",
+      "jenni pro",
+      "skugraph",
+      "sku graph",
+      "jockeyvc"
+    ]
+  },
+  "workflowStateMapping": {
+    "OPEN": {
+      "included": true,
+      "linearStatus": "Todo",
+      "linearStatusType": "unstarted"
+    },
+    "VERIFY": {
+      "included": true,
+      "linearStatus": "Todo",
+      "linearStatusType": "unstarted"
+    },
+    "BLOCKED": {
+      "included": true,
+      "linearStatus": "Backlog",
+      "linearStatusType": "backlog"
+    },
+    "PARKED": {
+      "included": false,
+      "linearStatus": null,
+      "linearStatusType": null
+    }
+  },
+  "priorityMapping": {
+    "URGENT": 1,
+    "HIGH": 2,
+    "NORMAL": 3,
+    "LOW": 4
+  },
+  "authority": {
+    "linearStatusIsAuthoritative": false,
+    "linearDoneIsCompletionProof": false,
+    "linearDoneIsApproval": false,
+    "linearCommentIsCompletionProof": false,
+    "linearCommentIsApproval": false,
+    "completionRequires": "source-backed verifier evidence or an external-effect receipt",
+    "approvalRequires": "a Brad approval record bound to the exact effect payload"
+  }
+}

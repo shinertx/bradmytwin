@@ -14,8 +14,16 @@
 - `audit_logs`
 - `runtime_sessions`
 - `model_profiles`
+- `reminders`
+- `tasks`
+- `ea_signals`
+- `ea_source_records`
+- `ea_monitors`
 
-Schema is defined in [`infra/postgres/init/001_schema.sql`](../infra/postgres/init/001_schema.sql).
+Schema is defined in:
+- [`infra/postgres/init/001_schema.sql`](../infra/postgres/init/001_schema.sql)
+- [`infra/postgres/init/002_deep_openclaw.sql`](../infra/postgres/init/002_deep_openclaw.sql)
+- [`infra/postgres/init/003_ea_control_tower.sql`](../infra/postgres/init/003_ea_control_tower.sql)
 
 ## Redis Keys
 - `otp:phone:{e164}` OTP codes
