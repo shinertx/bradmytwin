@@ -1032,6 +1032,54 @@ test('outbound delivery matches the exact response when a persistent session has
   assert.equal(delivery[0].payload.messageId, 'provider-second-response');
 });
 
+test('missing connector receipts become reconcile-required instead of remaining pending or retrying', async () => {
+  const calls = [];
+  let receiptTimeout = null;
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      if (operation === 'intake') return claim(payload.externalMessageId);
+      if (operation === 'thread-reply') {
+        return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+      }
+      return gatewayOk(operation);
+    },
+    setTimeout(callback, delay) {
+      assert.equal(delay, 30_000);
+      receiptTimeout = { callback, unref() {} };
+      return receiptTimeout;
+    },
+    clearTimeout(timer) {
+      if (timer === receiptTimeout) receiptTimeout = null;
+    }
+  }).register(api);
+
+  const { ctx } = await claimNormal(api, 'missing-receipt');
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'provider-visible but not acknowledged' },
+    ctx
+  );
+  assert.equal(
+    await api.handlers.get('reply_payload_sending')({ kind: 'final', runId: 'missing-receipt' }, ctx),
+    undefined
+  );
+  assert.ok(receiptTimeout);
+
+  receiptTimeout.callback();
+  await flushPromises();
+  await flushPromises();
+
+  const delivery = calls.filter((call) => call.operation === 'thread-delivery');
+  assert.equal(delivery.length, 1);
+  assert.equal(delivery[0].payload.success, false);
+  assert.equal(delivery[0].payload.messageId, null);
+  assert.equal(
+    (await api.handlers.get('reply_payload_sending')({ kind: 'final', runId: 'missing-receipt' }, ctx)).cancel,
+    true
+  );
+});
+
 test('the two-minute recovery scan schedules the original session and transfers its exact claim', async () => {
   const calls = [];
   const scheduledTurns = [];

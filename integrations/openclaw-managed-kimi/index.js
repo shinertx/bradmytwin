@@ -9,6 +9,7 @@ const MAX_RUN_AGE_MS = 30 * 60 * 1000;
 const MAX_RUN_ID_LENGTH = 243;
 const CLAIM_RENEW_INTERVAL_MS = 60 * 1000;
 const RECOVERY_SCAN_INTERVAL_MS = 2 * 60 * 1000;
+const DELIVERY_RECEIPT_TIMEOUT_MS = 30 * 1000;
 const MAX_RECOVERIES_PER_SCAN = 20;
 const MANAGED_CONTINUATION_MAX_AGE_MS = 30 * 1000;
 const RECOVERY_PACKET_PREFIX = 'BRAD_RECOVERY_PACKET_V1:';
@@ -331,11 +332,16 @@ export function createManagedKimiPlugin(options = {}) {
   const now = options.now || Date.now;
   const scheduleInterval = options.setInterval || globalThis.setInterval;
   const cancelInterval = options.clearInterval || globalThis.clearInterval;
+  const scheduleTimeout = options.setTimeout || globalThis.setTimeout;
+  const cancelTimeout = options.clearTimeout || globalThis.clearTimeout;
   const randomId = options.randomUUID || randomUUID;
   if (typeof callGateway !== 'function') throw new TypeError('gateway must be a function');
   if (typeof now !== 'function') throw new TypeError('now must be a function');
   if (typeof scheduleInterval !== 'function' || typeof cancelInterval !== 'function') {
     throw new TypeError('interval scheduler must be a function');
+  }
+  if (typeof scheduleTimeout !== 'function' || typeof cancelTimeout !== 'function') {
+    throw new TypeError('timeout scheduler must be a function');
   }
 
   return {
@@ -375,10 +381,17 @@ export function createManagedKimiPlugin(options = {}) {
         state.heartbeat = null;
       };
 
+      const stopDeliveryReceiptTimer = (state) => {
+        if (!state?.deliveryReceiptTimer) return;
+        cancelTimeout(state.deliveryReceiptTimer);
+        state.deliveryReceiptTimer = null;
+      };
+
       const deleteRunState = (runId, expectedState) => {
         const state = runStates.get(runId);
         if (!state || (expectedState && state !== expectedState)) return;
         stopHeartbeat(state);
+        stopDeliveryReceiptTimer(state);
         for (const [candidateRunId, candidateState] of runStates) {
           if (candidateState !== state) continue;
           runStates.delete(candidateRunId);
@@ -459,7 +472,8 @@ export function createManagedKimiPlugin(options = {}) {
           originRunId: runId,
           activeRunId: runId,
           createdAt: now(),
-          heartbeat: null
+          heartbeat: null,
+          deliveryReceiptTimer: null
         };
         const heartbeat = scheduleInterval(() => {
           if (runStates.get(runId) !== state || state.status !== 'claimed') return;
@@ -900,7 +914,27 @@ export function createManagedKimiPlugin(options = {}) {
         if (normalizedString(event?.kind).toLowerCase() !== 'final') return;
         const matched = findOutboundState(event, ctx);
         if (!matched && !isManagedOutboundSession(event, ctx)) return;
-        if (['settled', 'delivered'].includes(matched?.state?.status)) return;
+        if (matched?.state?.status === 'settled') {
+          const { state } = matched;
+          if (!state.deliveryReceiptTimer) {
+            state.deliveryReceiptTimer = scheduleTimeout(() => {
+              state.deliveryReceiptTimer = null;
+              if (state.status !== 'settled' || !state.responseDigest) return;
+              void callGateway('thread-delivery', {
+                inboundId: state.claim.inboundId,
+                jobId: state.claim.jobId,
+                responseDigest: state.responseDigest,
+                success: false,
+                messageId: null
+              }).catch(() => undefined).finally(() => {
+                if (state.status === 'settled') state.status = 'delivery_reconcile_required';
+              });
+            }, DELIVERY_RECEIPT_TIMEOUT_MS);
+            state.deliveryReceiptTimer?.unref?.();
+          }
+          return;
+        }
+        if (matched?.state?.status === 'delivered') return;
         return {
           cancel: true,
           reason: 'Brad blocked an answer that was not durably settled in the control plane.'
@@ -926,6 +960,7 @@ export function createManagedKimiPlugin(options = {}) {
         const { runId, state } = matched;
         if (state.status === 'delivered') return;
         if (state.status !== 'settled' || !state.responseDigest) return;
+        stopDeliveryReceiptTimer(state);
         try {
           await callGateway('thread-delivery', {
             inboundId: state.claim.inboundId,
