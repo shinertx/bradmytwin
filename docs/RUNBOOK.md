@@ -108,6 +108,7 @@ Automated Linear dispatch requires an issue in `In Progress` with both `Hermes` 
 6. Link Kimi to this existing OpenClaw runtime through `kimi.com/bot`; back up the OpenClaw config first and retain the current model profile as rollback.
    Install `integrations/openclaw-managed-kimi` only on OpenClaw `2026.7.1-2` or newer. The plugin entry must explicitly set `hooks.allowConversationAccess=true` and `hooks.allowPromptInjection=true`; OpenClaw otherwise refuses the non-bundled conversation hooks. Set `config.recoveryEnabled=false` in isolated staging and `true` only on the promoted single runtime.
    Install `infra/openclaw/openclaw-node24-wrapper` as `/usr/local/bin/openclaw` so operator commands use the same Node 24 binary as the healthy service. Verify the resolved command and version before changing any runtime state.
+   On a Kimi-managed host, inspect the final `openclaw-gateway` `ExecStart`. If the shell command resolves to an older package, install a wrapper earlier in that shell's `PATH` that executes the exact gateway package. The current managed host uses `/root/.local/bin/openclaw` -> `/usr/bin/node /opt/openclaw-2026.7.1-2/node_modules/openclaw/openclaw.mjs`; do not remove the plugin `hooks` policy based on validation from the obsolete 2026.4.14 CLI.
 7. Run the runtime, conversation, restart, loop, safety, reconciliation, and two-person isolation canaries.
 8. Set `BRAD_CONDUCTOR_MODE=active` only after the documented promotion threshold passes.
 

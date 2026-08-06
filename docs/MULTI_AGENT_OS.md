@@ -76,7 +76,7 @@ The non-bundled `brad-managed-kimi` plugin must be loaded only on a supported ma
     "managedMainAccountDigest": "<sha256-account-fingerprint>",
     "managedOwnerIdentity": "kimi-claw:main",
     "modelProvider": "kimi-coding",
-    "model": "k3",
+    "model": "k2p6",
     "recoveryEnabled": true
   }
 }
@@ -86,4 +86,4 @@ Use `recoveryEnabled: false` in isolated staging. The guarded candidate uses `tr
 
 The bridge uses the provider message ID for durable deduplication, requires an explicit trusted-owner signal, settles the executive response in Postgres before final delivery, blocks all unclaimed tools, renews live claims, and reschedules expired work into the original OpenClaw session. The recovery claim token stays in plugin memory and is rotated to the exact resumed run before model execution.
 
-Kimi's current official K3 identity is `kimi-coding/k3` with a `1.0m` context. Do not label the candidate K3 until a fresh live `session_status` proves both values; the current durable Brad record proves the executive response and account identity, not the provider model field.
+Kimi's current official K3 identity is `kimi-coding/k3` with a `1.0m` context. The current proven candidate remains `kimi-coding/k2p6`; a live K3 canary reached the Kimi account-plan suspension gate and was rolled back. Do not retry K3 or authorize a purchase without owner approval, and do not label the candidate K3 until a fresh response and durable objective prove the upgraded model.

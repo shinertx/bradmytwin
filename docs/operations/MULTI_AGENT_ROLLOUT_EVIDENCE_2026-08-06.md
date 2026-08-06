@@ -10,7 +10,9 @@ Keep the multi-agent system in a guarded candidate state. The managed Kimi lane 
 - The GCP Brad runtime remains the single production Telegram consumer on OpenClaw `2026.7.1-2`, Node `24.18.0`, and rollback model `openai/gpt-5.5`.
 - API intake is `shadow`. The worker is `active` only so explicitly created managed-Kimi candidate jobs can execute.
 - The separate Kimi-managed instance is preserved. Its authenticated `brad-managed-kimi` bridge is version `1.5.4`; it is not the production Telegram consumer.
-- The official Kimi target for K3 is `kimi-coding/k3` with a `1.0m` context. The linked candidate has not yet returned a fresh durable `session_status` proving that exact model, so do not relabel it as K3 in production evidence.
+- The proven managed model remains `kimi-coding/k2p6`. The aligned 2026.7.1-2 administrative CLI reports it as both `defaultModel` and `resolvedDefault`.
+- The official Kimi target for K3 is `kimi-coding/k3` with a `1.0m` context. A live switch resolved to K3, but the first response failed with `Your account is suspended`; K3 is therefore `BLOCKED_BY_KIMI_PLAN`, not promoted. No purchase was made. The exact pre-change config was restored and K2P6 passed a fresh conversation canary.
+- The managed shell originally resolved `openclaw` to 2026.4.14 while the gateway used `/opt/openclaw-2026.7.1-2`. `/root/.local/bin/openclaw` now wraps the exact gateway package, removing administrative schema drift without changing the service command.
 - Buzz Desktop is `0.5.5`. `com.brad.buzz-bridge` and the separately signed `com.brad.buzz-codex-agent` are both running locally.
 
 ## Implemented Control Plane
@@ -55,11 +57,18 @@ The candidate now provides:
 - Proof: `RECOVERY_AFTER_RESTART_V5_OK`, thread `SUCCEEDED/VERIFIED`.
 - A subsequent ordinary `systemctl restart brad-worker` completed in about three seconds and returned active.
 
+### Model rollback and bridge V6S
+
+- The K3 configuration test was backed up first and failed at the account-plan gate before Brad intake.
+- The original hook policy and `kimi-coding/k2p6` model were restored. The gateway returned active.
+- Thread `9940fcf5-e1be-4da5-b9fa-805c0abe3d1c` then completed the automatic Brad/Kimi -> Hermes -> signed Codex -> Hermes revision -> verifier flow.
+- Proof: `RESTORED_BRIDGE_V6S_OK`, thread `SUCCEEDED/VERIFIED`.
+
 ## Shadow And Live Counts
 
 - Shadow gate: 10/10 threads created with 20 durable messages and no worker jobs.
-- Low-risk live gate: 3/20 independently verified objectives completed.
-- Verified live completion so far: 100% of the three completed candidate objectives, but the sample is below the required 20 and is not promotion evidence by itself.
+- Low-risk live gate: 4/20 independently verified objectives completed.
+- Verified live completion so far: 100% of the four completed candidate objectives, but the sample is below the required 20 and is not promotion evidence by itself.
 
 ## Automated Verification
 
@@ -74,8 +83,8 @@ The tests explicitly cover 100-way intake deduplication, exact reply identity, s
 
 ## Remaining Promotion Gates
 
-1. Prove the candidate's exact live Kimi model using a durable `session_status`; target `kimi-coding/k3`, context `1.0m`.
-2. Complete 17 more low-risk live objectives, for 20 total, with zero lost objectives, unauthorized or duplicate effects, and false critical completions.
+1. Resolve the Kimi account-plan suspension before retrying K3. Do not authorize a purchase implicitly. After access is restored, prove `kimi-coding/k3`, context `1.0m`, with a fresh response and durable objective.
+2. Complete 16 more low-risk live objectives, for 20 total, with zero lost objectives, unauthorized or duplicate effects, and false critical completions.
 3. Compare owner intervention rate against the recorded baseline and prove at least a 20% reduction.
 4. Keep missing provider delivery receipts as `RECONCILE_REQUIRED`; do not promote exact-response evidence to delivered-channel proof.
 
