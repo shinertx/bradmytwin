@@ -262,6 +262,37 @@ test('exact managed Kimi identity compensates for the connector owner-bit gap', 
   assert.equal(calls[0].payload.senderId, 'main');
 });
 
+test('managed Kimi account identity joins the live hook shape when sender fields are absent', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      return operation === 'intake' ? claim(payload.externalMessageId) : gatewayOk(operation);
+    }
+  }).register(api);
+
+  const ctx = kimiContext('managed-account-fallback', {
+    messageProvider: 'kimi-claw',
+    channelId: 'conversation-1',
+    senderId: undefined
+  });
+  await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('managed account fallback', {
+      channelId: 'conversation-1',
+      senderId: undefined,
+      senderIsOwner: undefined,
+      accountId: 'main'
+    }),
+    ctx
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(calls[0].operation, 'intake');
+  assert.equal(calls[0].payload.senderId, 'main');
+});
+
 test('unknown or non-owner execution signals fail closed before intake', async () => {
   const calls = [];
   const api = fakeApi();
@@ -283,8 +314,30 @@ test('unknown or non-owner execution signals fail closed before intake', async (
   }
   assert.deepEqual(calls, []);
   assert.deepEqual(api.warnings, [
-    'Brad managed intake blocked: managed_kimi_owner_proof_required',
-    'Brad managed intake blocked: managed_kimi_owner_proof_required'
+    'Brad managed intake blocked: managed_kimi_owner_identity_mismatch',
+    'Brad managed intake blocked: managed_kimi_owner_identity_mismatch'
+  ]);
+});
+
+test('managed Kimi account identity must match exactly and cannot authorize another account', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({ gateway: async (...args) => { calls.push(args); return claim('unsafe'); } }).register(api);
+  const ctx = kimiContext('wrong-account', { senderId: undefined, accountId: 'other' });
+  await api.handlers.get('inbound_claim')(inboundEvent(), ctx);
+  const result = await api.handlers.get('before_agent_run')(
+    runEvent('must not run', {
+      senderId: undefined,
+      senderIsOwner: false,
+      accountId: 'other'
+    }),
+    ctx
+  );
+
+  assert.equal(result.outcome, 'block');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(api.warnings, [
+    'Brad managed intake blocked: managed_kimi_owner_identity_mismatch'
   ]);
 });
 

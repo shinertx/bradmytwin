@@ -2,7 +2,7 @@
   "id": "brad-managed-kimi",
   "name": "Brad Managed Kimi Bridge",
   "description": "Correlates managed Kimi runs with exact Brad durable-control-plane claims.",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",
@@ -19,7 +19,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 384,
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._:-]*$",
         "description": "Exact authenticated managed-channel identity, such as kimi-claw:main."
       },
       "modelProvider": {

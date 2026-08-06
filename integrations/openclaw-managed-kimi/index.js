@@ -128,7 +128,7 @@ function parsePluginConfig(pluginConfig) {
     managedOwnerIdentity: configString(
       pluginConfig,
       'managedOwnerIdentity',
-      /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+      /^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._:-]*$/,
       384
     ).toLowerCase(),
     modelProvider: configString(pluginConfig, 'modelProvider', /^[A-Za-z0-9][A-Za-z0-9._-]*$/, 128),
@@ -143,12 +143,36 @@ function isManagedBradRun(ctx, config) {
 }
 
 function sourceChannel(event, ctx) {
-  const provider = [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel]
+  const providers = [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel]
     .map((value) => normalizedString(value).toLowerCase())
-    .find(Boolean) ?? '';
-  if (provider.includes('telegram')) return 'TELEGRAM';
-  if (provider.includes('kimi')) return 'KIMI';
+    .filter(Boolean);
+  if (providers.some((provider) => provider.includes('telegram'))) return 'TELEGRAM';
+  if (providers.some((provider) => provider.includes('kimi'))) return 'KIMI';
   return 'WEB';
+}
+
+function boundedContextValues(values, maxLength) {
+  return [...new Set(values
+    .map((value) => normalizedString(value))
+    .filter((value) => value && value.length <= maxLength))];
+}
+
+function matchedManagedPrincipal(identity, providers, principals) {
+  for (const provider of providers) {
+    for (const principal of principals) {
+      if (`${provider}:${principal}`.toLowerCase() === identity) return principal;
+    }
+  }
+  return '';
+}
+
+function ownerProofFailure(identity, providers, principals) {
+  const expectedProvider = identity.slice(0, identity.indexOf(':'));
+  if (!providers.some((provider) => provider.toLowerCase() === expectedProvider)) {
+    return 'managed_kimi_owner_provider_mismatch';
+  }
+  if (principals.length === 0) return 'managed_kimi_owner_subject_required';
+  return 'managed_kimi_owner_identity_mismatch';
 }
 
 function boundedContextValue(values, maxLength, fallback = '') {
@@ -348,15 +372,29 @@ export function createManagedKimiPlugin(options = {}) {
       const claimNormalRun = async (event, ctx, runId) => {
         const inbound = inboundStates.get(runId);
         if (!inbound) throw new Error('managed_kimi_owner_proof_required');
-        const provider = boundedContextValue(
+        const providers = boundedContextValues(
           [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel, inbound.provider],
           128
-        ).toLowerCase();
-        const senderId = boundedContextValue([event?.senderId, inbound.senderId], 256);
-        const managedIdentity = provider && senderId ? `${provider}:${senderId}`.toLowerCase() : '';
+        );
+        const principals = boundedContextValues([
+          event?.senderId,
+          ctx?.senderId,
+          inbound.senderId,
+          event?.accountId,
+          ctx?.accountId,
+          inbound.accountId
+        ], 256);
+        const managedPrincipal = matchedManagedPrincipal(
+          config.managedOwnerIdentity,
+          providers,
+          principals
+        );
+        const senderId = managedPrincipal || principals[0] || '';
         const ownerVerified = event?.senderIsOwner === true
-          || (inbound.channel === 'KIMI' && managedIdentity === config.managedOwnerIdentity);
-        if (!ownerVerified) throw new Error('managed_kimi_owner_proof_required');
+          || (inbound.channel === 'KIMI' && Boolean(managedPrincipal));
+        if (!ownerVerified) {
+          throw new Error(ownerProofFailure(config.managedOwnerIdentity, providers, principals));
+        }
         if (!inbound.externalMessageId || !inbound.sessionKey || !inbound.conversationId || !senderId) {
           throw new Error('managed_kimi_inbound_correlation_required');
         }
@@ -523,6 +561,7 @@ export function createManagedKimiPlugin(options = {}) {
           512
         );
         const senderId = boundedContextValue([event?.senderId, ctx?.senderId], 256);
+        const accountId = boundedContextValue([event?.accountId, ctx?.accountId], 256);
         const provider = boundedContextValue(
           [event?.channelId, event?.channel, ctx?.messageProvider, ctx?.channel],
           128
@@ -532,6 +571,7 @@ export function createManagedKimiPlugin(options = {}) {
           sessionKey,
           conversationId,
           senderId,
+          accountId,
           provider,
           channel: sourceChannel(event, ctx),
           createdAt: now()
