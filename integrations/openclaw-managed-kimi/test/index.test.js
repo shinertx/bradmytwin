@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { createManagedKimiPlugin } from '../index.js';
@@ -600,6 +601,7 @@ test('managed Kimi continuation resumes a boot claim across isolated plugin cont
             session_key: `agent:${CONFIG.managedAgentId}:main`,
             channel: 'KIMI',
             conversation_id: `agent:${CONFIG.managedAgentId}:boot`,
+            sender_id: 'main',
             goal: prompt,
             definition_of_done: 'verified result',
             verification_method: 'source of truth',
@@ -1438,6 +1440,380 @@ test('outbound delivery matches the exact response when a persistent session has
   assert.equal(delivery[0].payload.messageId, 'provider-second-response');
 });
 
+test('delivery diagnostics expose only metadata shape and never response values', async () => {
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      if (operation === 'intake') return claim(payload.externalMessageId);
+      if (operation === 'thread-reply') {
+        return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+      }
+      return gatewayOk(operation);
+    }
+  }).register(api);
+  const runId = 'delivery-diagnostic';
+  const ctx = telegramContext(runId);
+  await api.handlers.get('before_agent_run')(
+    telegramRunEvent('diagnose delivery shape'),
+    ctx
+  );
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'private settled response' },
+    ctx
+  );
+
+  await api.handlers.get('message_sent')(
+    {
+      to: 'private-destination-value',
+      content: 'private-response-value',
+      success: true
+    },
+    {
+      messageProvider: 'telegram',
+      channel: 'telegram',
+      channelId: TEST_TELEGRAM_ID,
+      accountId: TEST_TELEGRAM_ACCOUNT,
+      conversationId: TEST_TELEGRAM_ID
+    }
+  );
+
+  assert.match(api.warnings[0], /^Brad managed delivery context shape: event_keys=/);
+  assert.match(api.warnings[0], /matched=false/);
+  assert.match(api.warnings[0], /content_present=true/);
+  assert.match(api.warnings[0], /state_count=1/);
+  assert.match(api.warnings[0], /settled_count=1/);
+  assert.equal(api.warnings[0].includes('private-response-value'), false);
+  assert.equal(api.warnings[0].includes('private-destination-value'), false);
+  assert.equal(api.warnings[0].includes(TEST_TELEGRAM_ACCOUNT), false);
+  assert.equal(api.warnings[0].includes(TEST_TELEGRAM_ID), false);
+});
+
+test('delivery gateway failures log one stable redacted code', async () => {
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      if (operation === 'intake') return claim(payload.externalMessageId);
+      if (operation === 'thread-reply') {
+        return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+      }
+      if (operation === 'thread-delivery') {
+        throw new Error('sensitive gateway failure details');
+      }
+      return gatewayOk(operation);
+    }
+  }).register(api);
+  const runId = 'delivery-gateway-failure';
+  const ctx = telegramContext(runId);
+  await api.handlers.get('before_agent_run')(
+    telegramRunEvent('record exact delivery'),
+    ctx
+  );
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'private settled response' },
+    ctx
+  );
+  await api.handlers.get('message_sent')(
+    { to: TEST_TELEGRAM_ID, content: 'private settled response', success: true },
+    {
+      messageProvider: 'telegram',
+      channel: 'telegram',
+      channelId: TEST_TELEGRAM_ID,
+      accountId: TEST_TELEGRAM_ACCOUNT,
+      conversationId: TEST_TELEGRAM_ID
+    }
+  );
+
+  assert.equal(api.warnings[1], 'Brad managed delivery receipt failed: brad_gateway_delivery_rejected');
+  assert.equal(api.warnings.join('\n').includes('sensitive gateway failure details'), false);
+});
+
+test('Telegram delivery requires the exact provider, account, conversation, and response digest', async () => {
+  const calls = [];
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      if (operation === 'intake') return claim(payload.externalMessageId);
+      if (operation === 'thread-reply') {
+        return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+      }
+      return gatewayOk(operation);
+    }
+  }).register(api);
+  const runId = 'exact-telegram-delivery';
+  const ctx = telegramContext(runId);
+  await api.handlers.get('before_agent_run')(
+    telegramRunEvent('prove exact delivery correlation'),
+    ctx
+  );
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'exact settled response' },
+    ctx
+  );
+
+  const variants = [
+    {
+      event: { to: TEST_TELEGRAM_ID, content: 'exact settled response', success: true },
+      ctx: {
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: { to: TEST_TELEGRAM_ID, content: 'exact settled response', success: true },
+      ctx: {
+        messageProvider: 'web',
+        channel: 'web',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: { to: TEST_TELEGRAM_ID, content: 'exact settled response', success: true },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: 'telegram-proxy',
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: { to: '9999999999', content: 'exact settled response', success: true },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: { to: TEST_TELEGRAM_ID, content: 'exact settled response', success: true },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: 'secondary',
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: { to: TEST_TELEGRAM_ID, content: 'unrelated same-chat response', success: true },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: {
+        runId,
+        to: TEST_TELEGRAM_ID,
+        content: 'wrong response with exact run id',
+        success: true
+      },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: { runId, to: TEST_TELEGRAM_ID, success: true },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: { to: TEST_TELEGRAM_ID, content: 'wrong response with exact session', success: true },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID,
+        sessionKey: ctx.sessionKey
+      }
+    },
+    {
+      event: { to: TEST_TELEGRAM_ID, success: true },
+      ctx: {
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID,
+        sessionKey: ctx.sessionKey
+      }
+    },
+    {
+      event: {
+        runId,
+        to: TEST_TELEGRAM_ID,
+        content: 'exact settled response',
+        success: true
+      },
+      ctx: {
+        runId: 'conflicting-telegram-run',
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: {
+        sessionKey: ctx.sessionKey,
+        to: TEST_TELEGRAM_ID,
+        content: 'exact settled response',
+        success: true
+      },
+      ctx: {
+        sessionKey: 'agent:brad-runtime:telegram:conflict',
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    },
+    {
+      event: {
+        runId,
+        sessionKey: 'agent:brad-runtime:telegram:conflict',
+        to: TEST_TELEGRAM_ID,
+        content: 'exact settled response',
+        success: true
+      },
+      ctx: {
+        runId,
+        messageProvider: 'telegram',
+        channelId: TEST_TELEGRAM_ID,
+        accountId: TEST_TELEGRAM_ACCOUNT,
+        conversationId: TEST_TELEGRAM_ID
+      }
+    }
+  ];
+  for (const variant of variants) {
+    await api.handlers.get('message_sent')(variant.event, variant.ctx);
+    assert.equal(calls.filter((call) => call.operation === 'thread-delivery').length, 0);
+  }
+
+  await api.handlers.get('message_sent')(
+    { to: TEST_TELEGRAM_ID, content: 'exact settled response', success: true },
+    {
+      messageProvider: 'telegram',
+      channel: 'telegram',
+      channelId: TEST_TELEGRAM_ID,
+      accountId: TEST_TELEGRAM_ACCOUNT,
+      conversationId: TEST_TELEGRAM_ID
+    }
+  );
+  assert.equal(calls.filter((call) => call.operation === 'thread-delivery').length, 1);
+});
+
+test('concurrent delivery callbacks submit one receipt', async () => {
+  const calls = [];
+  const pendingDelivery = deferred();
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      if (operation === 'intake') return claim(payload.externalMessageId);
+      if (operation === 'thread-reply') {
+        return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+      }
+      if (operation === 'thread-delivery') return pendingDelivery.promise;
+      return gatewayOk(operation);
+    }
+  }).register(api);
+  const runId = 'concurrent-delivery';
+  const ctx = telegramContext(runId);
+  await api.handlers.get('before_agent_run')(
+    telegramRunEvent('record delivery once'),
+    ctx
+  );
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'one provider response' },
+    ctx
+  );
+  const event = { to: TEST_TELEGRAM_ID, content: 'one provider response', success: true };
+  const outboundCtx = {
+    messageProvider: 'telegram',
+    channel: 'telegram',
+    channelId: TEST_TELEGRAM_ID,
+    accountId: TEST_TELEGRAM_ACCOUNT,
+    conversationId: TEST_TELEGRAM_ID
+  };
+
+  const first = api.handlers.get('message_sent')(event, outboundCtx);
+  await flushPromises();
+  const second = api.handlers.get('message_sent')(event, outboundCtx);
+  await flushPromises();
+  assert.equal(calls.filter((call) => call.operation === 'thread-delivery').length, 1);
+  pendingDelivery.resolve({ ok: true });
+  await Promise.all([first, second]);
+  await api.handlers.get('message_sent')(event, outboundCtx);
+  assert.equal(calls.filter((call) => call.operation === 'thread-delivery').length, 1);
+});
+
+test('delivery timeout and provider callback cannot submit conflicting receipts', async () => {
+  const calls = [];
+  const pendingDelivery = deferred();
+  let receiptTimeout = null;
+  const api = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      if (operation === 'intake') return claim(payload.externalMessageId);
+      if (operation === 'thread-reply') {
+        return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+      }
+      if (operation === 'thread-delivery') return pendingDelivery.promise;
+      return gatewayOk(operation);
+    },
+    setTimeout(callback, delay) {
+      assert.equal(delay, 30_000);
+      receiptTimeout = { callback, unref() {} };
+      return receiptTimeout;
+    },
+    clearTimeout(timer) {
+      if (timer === receiptTimeout) receiptTimeout = null;
+    }
+  }).register(api);
+  const runId = 'timeout-delivery-race';
+  const ctx = telegramContext(runId);
+  await api.handlers.get('before_agent_run')(
+    telegramRunEvent('race delivery timeout'),
+    ctx
+  );
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'single authoritative response' },
+    ctx
+  );
+  assert.ok(receiptTimeout);
+
+  receiptTimeout.callback();
+  await flushPromises();
+  await api.handlers.get('message_sent')(
+    { to: TEST_TELEGRAM_ID, content: 'single authoritative response', success: true },
+    {
+      messageProvider: 'telegram',
+      channelId: TEST_TELEGRAM_ID,
+      accountId: TEST_TELEGRAM_ACCOUNT,
+      conversationId: TEST_TELEGRAM_ID
+    }
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.operation === 'thread-delivery').map((call) => call.payload.success),
+    [false]
+  );
+  pendingDelivery.resolve({ ok: true });
+  await flushPromises();
+});
+
 test('missing connector receipts become reconcile-required instead of remaining pending or retrying', async () => {
   const calls = [];
   let receiptTimeout = null;
@@ -1496,6 +1872,7 @@ test('the two-minute recovery scan schedules the original session and transfers 
     session_key: 'agent:brad-runtime:kimi-claw:direct:conversation-1',
     channel: 'KIMI',
     conversation_id: 'conversation-1',
+    sender_id: 'main',
     goal: 'Recover the objective',
     definition_of_done: 'Verified result or precise blocker',
     verification_method: 'Check the source of truth',
@@ -1565,6 +1942,80 @@ test('the two-minute recovery scan schedules the original session and transfers 
     await api.handlers.get('reply_payload_sending')({ kind: 'final' }, recoveryCtx),
     undefined
   );
+});
+
+test('recovered Telegram runs preserve the paired owner binding for delivery receipts', async () => {
+  const calls = [];
+  const scheduledTurns = [];
+  let recoveryCalls = 0;
+  const recovered = {
+    inbound_id: 'inbound-recovered-telegram',
+    claimToken: 'recovery-token-telegram',
+    job_id: 'job-recovered-telegram',
+    thread_id: 'thread-recovered-telegram',
+    objective_id: 'objective-recovered-telegram',
+    session_key: `agent:${CONFIG.managedAgentId}:main`,
+    channel: 'TELEGRAM',
+    conversation_id: TEST_TELEGRAM_ID,
+    sender_id: TEST_TELEGRAM_ID,
+    goal: 'Recover the Telegram objective',
+    definition_of_done: 'Verified Telegram response',
+    verification_method: 'Exact connector receipt',
+    messages: []
+  };
+  const api = fakeApi(
+    { ...CONFIG, recoveryEnabled: true },
+    async (request) => scheduledTurns.push(request)
+  );
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ operation, payload });
+      if (operation === 'recover') {
+        recoveryCalls += 1;
+        return recoveryCalls === 1 ? { ok: true, assignment: recovered } : { ok: true, assignment: null };
+      }
+      if (operation === 'thread-transfer') {
+        return { ok: true, assignment: { ...recovered, claimToken: 'run-token-telegram' } };
+      }
+      if (operation === 'thread-reply') {
+        return { ok: true, responseDigest: settledResponseDigest(payload.text) };
+      }
+      return gatewayOk(operation);
+    },
+    randomUUID: () => 'runtime-telegram',
+    setInterval: (handler, delay) => ({ handler, delay, unref() {} }),
+    clearInterval() {}
+  }).register(api);
+
+  await api.handlers.get('gateway_start')();
+  assert.equal(scheduledTurns.length, 1);
+  const recoveryCtx = kimiContext('recovery-telegram-run', {
+    sessionKey: recovered.session_key
+  });
+  assert.equal(
+    await api.handlers.get('before_agent_run')(runEvent(scheduledTurns[0].message), recoveryCtx),
+    undefined
+  );
+  await api.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: 'recovered Telegram response' },
+    recoveryCtx
+  );
+  await api.handlers.get('message_sent')(
+    {
+      to: TEST_TELEGRAM_ID,
+      content: 'recovered Telegram response',
+      success: true
+    },
+    {
+      messageProvider: 'telegram',
+      channelId: TEST_TELEGRAM_ID,
+      accountId: TEST_TELEGRAM_ACCOUNT,
+      conversationId: TEST_TELEGRAM_ID
+    }
+  );
+  const delivery = calls.filter((call) => call.operation === 'thread-delivery');
+  assert.equal(delivery.length, 1);
+  assert.equal(delivery[0].payload.success, true);
 });
 
 test('unrelated agents and cron runs are neither claimed nor model-routed', async () => {
@@ -1701,4 +2152,10 @@ test('registration rejects missing, malformed, unknown, or unsafe recovery confi
     () => createManagedKimiPlugin({ gateway: async () => ({ ok: true }) }).register(apiWithoutScheduler),
     /scheduleSessionTurn/
   );
+});
+
+test('package and OpenClaw manifest versions stay aligned', () => {
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.version, packageJson.version);
 });

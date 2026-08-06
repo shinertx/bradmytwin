@@ -487,7 +487,7 @@ async function intake(pool, encoded) {
 async function loadManagedAssignment(client, inboundId, claimToken) {
   const result = await client.query(
     `SELECT
-       b.id AS inbound_id, b.channel, b.conversation_id, b.claim_token,
+       b.id AS inbound_id, b.channel, b.conversation_id, b.sender_id, b.claim_token,
        j.id AS job_id, j.status AS job_status, j.request_json, j.request_digest,
        t.id AS thread_id, t.status AS thread_status, t.reasoning_depth, t.authority_json,
        t.consecutive_agent_turns, t.max_consecutive_agent_turns,

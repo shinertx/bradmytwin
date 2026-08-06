@@ -212,6 +212,75 @@ function boundedContextValues(values, maxLength) {
     .filter((value) => value && value.length <= maxLength))];
 }
 
+function exactBoundedValues(values, maxLength) {
+  const result = [];
+  for (const value of values) {
+    if (value == null || value === '') continue;
+    if (
+      typeof value !== 'string'
+      || value !== value.trim()
+      || value.length > maxLength
+    ) return null;
+    result.push(value);
+  }
+  return [...new Set(result)];
+}
+
+function deliveryTargetMatches(state, event, ctx) {
+  if (state.channel !== 'TELEGRAM') return true;
+  const providers = exactBoundedValues(
+    [ctx?.messageProvider, ctx?.channel, event?.channel],
+    128
+  );
+  const channelIds = exactBoundedValues(
+    [ctx?.channelId, event?.channelId],
+    512
+  );
+  const conversations = exactBoundedValues(
+    [ctx?.conversationId, event?.conversationId, event?.to],
+    512
+  );
+  const accounts = exactBoundedValues([ctx?.accountId, event?.accountId], 256);
+  const accountId = accounts?.length === 1 ? accounts[0] : '';
+  const accountMatches = Boolean(
+    accountId
+    && (
+      (state.accountId && accountId === state.accountId)
+      || (
+        !state.accountId
+        && state.senderId
+        && promptDigest(`telegram:v1:${accountId}:${state.senderId}:${state.conversationId}`)
+          === state.telegramBindingDigest
+      )
+    )
+  );
+  return Boolean(
+    providers
+    && providers.every((value) => value === 'telegram')
+    && channelIds
+    && channelIds.every((value) => value === 'telegram' || value === state.conversationId)
+    && (providers.length > 0 || channelIds.includes('telegram'))
+    && conversations?.length
+    && conversations.every((value) => value === state.conversationId)
+    && accountMatches
+  );
+}
+
+function isExactTelegramDeliveryEvent(event, ctx, states) {
+  const explicitTelegram = [
+    ctx?.messageProvider,
+    ctx?.channel,
+    ctx?.channelId,
+    event?.channel,
+    event?.channelId
+  ].some((value) => value === 'telegram');
+  if (explicitTelegram) return true;
+  return states.some((state) => (
+    state.channel === 'TELEGRAM'
+    && [ctx?.channelId, event?.channelId].some((value) => value === state.conversationId)
+  ));
+}
+
 function exactTelegramId(value) {
   return typeof value === 'string'
     && value.length <= 20
@@ -365,6 +434,7 @@ function validateRecoveryAssignment(result) {
     sessionKey: claimField(assignment, 'session_key', 512),
     channel: claimField(assignment, 'channel', 20),
     conversationId: claimField(assignment, 'conversation_id', 512),
+    senderId: claimField(assignment, 'sender_id', 256),
     goal: claimField(assignment, 'goal', 100_000),
     definitionOfDone: claimField(assignment, 'definition_of_done', 100_000),
     verificationMethod: claimField(assignment, 'verification_method', 100_000),
@@ -440,6 +510,8 @@ export function createManagedKimiPlugin(options = {}) {
       let recoveryScanActive = false;
       let ownerContextShapeLogged = false;
       let continuationDiagnosticLogged = false;
+      let deliveryContextShapeLogged = false;
+      let deliveryReceiptFailureLogged = false;
       const ownerSeparator = config.managedOwnerIdentity.indexOf(':');
       const configuredOwnerPrincipal = config.managedOwnerIdentity.slice(ownerSeparator + 1);
       const managedBootSessionKey = `agent:${config.managedAgentId}:boot`;
@@ -526,6 +598,7 @@ export function createManagedKimiPlugin(options = {}) {
         state.deliveryReceiptTimer = scheduleTimeout(() => {
           state.deliveryReceiptTimer = null;
           if (state.status !== 'settled' || !state.responseDigest) return;
+          state.status = 'delivery_recording';
           void callGateway('thread-delivery', {
             inboundId: state.claim.inboundId,
             jobId: state.claim.jobId,
@@ -533,7 +606,7 @@ export function createManagedKimiPlugin(options = {}) {
             success: false,
             messageId: null
           }).catch(() => undefined).finally(() => {
-            if (state.status === 'settled') state.status = 'delivery_reconcile_required';
+            if (state.status === 'delivery_recording') state.status = 'delivery_reconcile_required';
           });
         }, DELIVERY_RECEIPT_TIMEOUT_MS);
         state.deliveryReceiptTimer?.unref?.();
@@ -587,18 +660,50 @@ export function createManagedKimiPlugin(options = {}) {
         return runId;
       };
 
-      const findOutboundState = (event, ctx) => {
-        const exactRunId = runIdFrom(event, ctx);
+      const findOutboundState = (event, ctx, options = {}) => {
+        const requireDeliveryTarget = options.requireDeliveryTarget === true;
+        const targetMatches = (state) => (
+          !requireDeliveryTarget || deliveryTargetMatches(state, event, ctx)
+        );
+        const runAliases = [event, ctx]
+          .filter((source) => Object.hasOwn(source ?? {}, 'runId'))
+          .map((source) => runIdFrom(source));
+        if (runAliases.some((value) => !value) || new Set(runAliases).size > 1) return null;
+        const exactRunId = runAliases[0] || '';
+        const sessionAliases = exactBoundedValues([event?.sessionKey, ctx?.sessionKey], 512);
+        if (!sessionAliases || sessionAliases.length > 1) return null;
+        const sessionKey = sessionAliases[0] || '';
         if (exactRunId && runStates.has(exactRunId)) {
-          return { runId: exactRunId, state: runStates.get(exactRunId) };
+          const state = runStates.get(exactRunId);
+          if (!targetMatches(state)) return null;
+          if (
+            sessionKey
+            && state.sessionKey !== sessionKey
+            && !state.sessionKeys?.has(sessionKey)
+          ) return null;
+          if (!requireDeliveryTarget || state.channel !== 'TELEGRAM') {
+            return { runId: exactRunId, state };
+          }
+          const outboundDigest = responseDigest(event?.content);
+          return outboundDigest
+            && ['settled', 'delivered'].includes(state.status)
+            && state.responseDigest === outboundDigest
+            ? { runId: exactRunId, state }
+            : null;
         }
-        const sessionKey = boundedContextValue([event?.sessionKey, ctx?.sessionKey], 512);
         const states = [...new Set([...runStates.values()].filter((state) => (
-          !sessionKey
-          || state.sessionKey === sessionKey
-          || state.sessionKeys?.has(sessionKey)
+          (
+            !sessionKey
+            || state.sessionKey === sessionKey
+            || state.sessionKeys?.has(sessionKey)
+          )
+          && targetMatches(state)
         )))];
-        if (states.length === 1) {
+        if (
+          sessionKey
+          && states.length === 1
+          && (!requireDeliveryTarget || states[0].channel !== 'TELEGRAM')
+        ) {
           const state = states[0];
           return { runId: state.activeRunId, state };
         }
@@ -626,6 +731,11 @@ export function createManagedKimiPlugin(options = {}) {
           sessionKeys: new Set([claim.sessionKey]),
           originSessionKey: claim.sessionKey,
           promptDigest: claim.promptDigest,
+          channel: claim.channel,
+          conversationId: claim.conversationId,
+          accountId: claim.accountId,
+          senderId: claim.senderId,
+          telegramBindingDigest: config.managedTelegramBindingDigest,
           originRunId: runId,
           activeRunId: runId,
           createdAt: now(),
@@ -774,7 +884,11 @@ export function createManagedKimiPlugin(options = {}) {
           ...validateClaim(result),
           claimOwner,
           sessionKey: inbound.sessionKey,
-          promptDigest: promptDigest(text)
+          promptDigest: promptDigest(text),
+          channel,
+          conversationId: inbound.conversationId,
+          accountId: inbound.accountId || null,
+          senderId
         });
       };
 
@@ -807,7 +921,11 @@ export function createManagedKimiPlugin(options = {}) {
           objectiveId: assignment.objectiveId,
           claimOwner,
           sessionKey: assignment.sessionKey,
-          promptDigest: promptDigest(event?.prompt)
+          promptDigest: promptDigest(event?.prompt),
+          channel: assignment.channel,
+          conversationId: assignment.conversationId,
+          accountId: null,
+          senderId: assignment.senderId
         });
       };
 
@@ -859,7 +977,11 @@ export function createManagedKimiPlugin(options = {}) {
             objectiveId: assignment.objectiveId,
             claimOwner: `openclaw-run:${runId}`,
             sessionKey: managedMainSessionKey,
-            promptDigest: digest
+            promptDigest: digest,
+            channel: assignment.channel,
+            conversationId: assignment.conversationId,
+            accountId: null,
+            senderId: assignment.senderId
           }));
         }
         if (!continuationDiagnosticLogged) {
@@ -1116,12 +1238,41 @@ export function createManagedKimiPlugin(options = {}) {
       }, { priority: 90 });
 
       api.on('message_sent', async (event, ctx) => {
-        const matched = findOutboundState(event, ctx);
+        const matched = findOutboundState(event, ctx, { requireDeliveryTarget: true });
+        const uniqueStates = [...new Set(runStates.values())];
+        if (!deliveryContextShapeLogged && isExactTelegramDeliveryEvent(event, ctx, uniqueStates)) {
+          const outboundDigest = responseDigest(event?.content);
+          const digestMatches = outboundDigest
+            ? uniqueStates.filter((state) => state.responseDigest === outboundDigest).length
+            : 0;
+          api.logger?.warn?.([
+            'Brad managed delivery context shape:',
+            `event_keys=${safeMetadataKeys(event)}`,
+            `ctx_keys=${safeMetadataKeys(ctx)}`,
+            `matched=${Boolean(matched)}`,
+            `content_present=${Boolean(normalizedString(event?.content))}`,
+            `success_true=${event?.success === true}`,
+            `message_id_present=${Boolean(normalizedString(event?.messageId))}`,
+            `event_run_id_present=${Boolean(runIdFrom(event))}`,
+            `ctx_run_id_present=${Boolean(runIdFrom(ctx))}`,
+            `event_session_present=${Boolean(normalizedString(event?.sessionKey))}`,
+            `ctx_session_present=${Boolean(normalizedString(ctx?.sessionKey))}`,
+            `event_to_present=${Boolean(normalizedString(event?.to))}`,
+            `ctx_channel_present=${Boolean(normalizedString(ctx?.channelId))}`,
+            `ctx_account_present=${Boolean(normalizedString(ctx?.accountId))}`,
+            `ctx_conversation_present=${Boolean(normalizedString(ctx?.conversationId))}`,
+            `state_count=${uniqueStates.length}`,
+            `settled_count=${uniqueStates.filter((state) => state.status === 'settled').length}`,
+            `digest_match_count=${digestMatches}`
+          ].join(' '));
+          deliveryContextShapeLogged = true;
+        }
         if (!matched) return;
         const { runId, state } = matched;
         if (state.status === 'delivered') return;
         if (state.status !== 'settled' || !state.responseDigest) return;
         stopDeliveryReceiptTimer(state);
+        state.status = 'delivery_recording';
         try {
           await callGateway('thread-delivery', {
             inboundId: state.claim.inboundId,
@@ -1137,6 +1288,10 @@ export function createManagedKimiPlugin(options = {}) {
           }
         } catch {
           // A missing receipt is itself ambiguous; hold the run for reconciliation.
+          if (!deliveryReceiptFailureLogged) {
+            api.logger?.warn?.('Brad managed delivery receipt failed: brad_gateway_delivery_rejected');
+            deliveryReceiptFailureLogged = true;
+          }
         }
         state.status = 'delivery_reconcile_required';
       }, { priority: 100 });
