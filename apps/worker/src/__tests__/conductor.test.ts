@@ -330,6 +330,68 @@ describe('Brad multi-agent conductor', () => {
     )).rows[0].count).toBe(1);
   }, 30_000);
 
+  it('atomically transfers one exact recent boot claim into the managed Kimi main session', async () => {
+    if (!pool) return;
+    await seedManagedKimiBinding(pool);
+    const text = 'Resume this exact managed Kimi objective.';
+    const bootClaimOwner = 'openclaw-run:boot-cross-context';
+    const first = await runGateway(`intake ${encodeGatewayPayload({
+      channel: 'KIMI',
+      externalMessageId: 'openclaw-run:boot-cross-context',
+      conversationId: 'agent:brad-runtime:boot',
+      sessionKey: 'agent:brad-runtime:boot',
+      senderId: 'main',
+      claimOwner: bootClaimOwner,
+      text
+    })}`);
+    const continuation = {
+      claimOwner: 'openclaw-run:main-cross-context',
+      bootConversationId: 'agent:brad-runtime:boot',
+      mainSessionKey: 'agent:brad-runtime:main',
+      text
+    };
+    await expect(runGatewayFailure(`continuation ${encodeGatewayPayload({
+      ...continuation,
+      mainSessionKey: 'agent:another-runtime:main'
+    })}`)).resolves.toMatchObject({ ok: false, error: 'invalid_main_session_key' });
+    await expect(runGateway(`continuation ${encodeGatewayPayload({
+      ...continuation,
+      text: 'A conflicting objective must not join.'
+    })}`)).resolves.toMatchObject({ ok: true, operation: 'continuation', assignment: null });
+
+    const resumed = await runGateway(`continuation ${encodeGatewayPayload(continuation)}`);
+    const assignment = resumed.assignment as Record<string, unknown>;
+    expect(assignment).toMatchObject({
+      inbound_id: first.inboundId,
+      job_id: first.jobId,
+      thread_id: first.threadId,
+      objective_id: first.objectiveId,
+      session_key: 'agent:brad-runtime:main',
+      channel: 'KIMI',
+      conversation_id: 'agent:brad-runtime:boot'
+    });
+    expect(assignment.claimToken).not.toBe(first.claimToken);
+    await expect(runGateway(`continuation ${encodeGatewayPayload(continuation)}`))
+      .resolves.toMatchObject({ ok: true, operation: 'continuation', assignment: null });
+
+    const response = {
+      jobId: first.jobId,
+      threadId: first.threadId,
+      objectiveId: first.objectiveId,
+      text: 'Delegate this objective with exact proof requirements.'
+    };
+    await expect(runGatewayFailure(`thread-reply ${encodeGatewayPayload({
+      ...response,
+      claimToken: first.claimToken,
+      claimOwner: bootClaimOwner
+    })}`)).resolves.toMatchObject({ ok: false, error: 'managed_kimi_claim_mismatch' });
+    await expect(runGateway(`thread-reply ${encodeGatewayPayload({
+      ...response,
+      claimToken: assignment.claimToken,
+      claimOwner: continuation.claimOwner
+    })}`)).resolves.toMatchObject({ ok: true, deduplicated: false, nextAgentId: 'hermes' });
+  });
+
   it('moves an explicitly failed managed response delivery into reconciliation and never retries it', async () => {
     if (!pool) return;
     await seedManagedKimiBinding(pool);

@@ -483,6 +483,98 @@ test('managed Kimi main continuation joins the exact authenticated boot claim on
   );
 });
 
+test('managed Kimi continuation resumes a boot claim across isolated plugin contexts', async () => {
+  const calls = [];
+  const prompt = 'cross-context managed Kimi objective';
+  const bootApi = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ runtime: 'boot', operation, payload });
+      return operation === 'intake' ? claim('cross-context') : gatewayOk(operation);
+    },
+    now: () => 2_000
+  }).register(bootApi);
+  const bootCtx = kimiContext('cross-context-boot', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    chatId: undefined,
+    senderId: undefined,
+    sessionKey: `agent:${CONFIG.managedAgentId}:boot`
+  });
+  assert.equal(await bootApi.handlers.get('before_agent_run')(
+    runEvent(prompt, {
+      channelId: undefined,
+      senderId: undefined,
+      accountId: undefined,
+      senderIsOwner: true
+    }),
+    bootCtx
+  ), undefined);
+
+  const mainApi = fakeApi();
+  createManagedKimiPlugin({
+    gateway: async (operation, payload) => {
+      calls.push({ runtime: 'main', operation, payload });
+      if (operation === 'continuation') {
+        return {
+          ok: true,
+          assignment: {
+            inbound_id: 'inbound-cross-context',
+            claimToken: 'claim-cross-context',
+            job_id: 'job-cross-context',
+            thread_id: 'thread-cross-context',
+            objective_id: 'objective-cross-context',
+            session_key: `agent:${CONFIG.managedAgentId}:main`,
+            channel: 'KIMI',
+            conversation_id: `agent:${CONFIG.managedAgentId}:boot`,
+            goal: prompt,
+            definition_of_done: 'verified result',
+            verification_method: 'source of truth',
+            messages: []
+          }
+        };
+      }
+      return gatewayOk(operation);
+    },
+    now: () => 2_001
+  }).register(mainApi);
+  const mainCtx = kimiContext('cross-context-main', {
+    messageProvider: undefined,
+    channel: undefined,
+    channelId: undefined,
+    chatId: undefined,
+    senderId: undefined,
+    sessionKey: `agent:${CONFIG.managedAgentId}:main`
+  });
+  assert.equal(await mainApi.handlers.get('before_agent_run')(
+    runEvent(prompt, {
+      channelId: undefined,
+      senderId: undefined,
+      accountId: 'internal-managed-account',
+      senderIsOwner: false
+    }),
+    mainCtx
+  ), undefined);
+  assert.equal(calls.filter((call) => call.runtime === 'main' && call.operation === 'intake').length, 0);
+  assert.equal(calls.filter((call) => call.operation === 'continuation').length, 1);
+
+  await mainApi.handlers.get('before_agent_finalize')(
+    { lastAssistantMessage: { role: 'assistant', content: 'cross-context response' } },
+    mainCtx
+  );
+  const reply = calls.find((call) => call.runtime === 'main' && call.operation === 'thread-reply');
+  assert.deepEqual(reply.payload, {
+    claimToken: 'claim-cross-context',
+    jobId: 'job-cross-context',
+    threadId: 'thread-cross-context',
+    objectiveId: 'objective-cross-context',
+    claimOwner: 'openclaw-run:cross-context-main',
+    sessionId: 'session-cross-context-main',
+    text: 'cross-context response'
+  });
+});
+
 test('managed Kimi continuation rejects prompt, missing-account, and time-window mismatches', async () => {
   let currentTime = 1_000;
   const calls = [];

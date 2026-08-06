@@ -22,6 +22,7 @@ const MANAGED_CHANNELS = new Set(['KIMI', 'TELEGRAM', 'WEB']);
 const SENSITIVE_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|bot[_-]?token|token|secret|password|passwd|pwd|private[_-]?key|credential)/i;
 // A two-minute recovery scan must be able to reclaim and resume within five minutes.
 const CLAIM_TTL_SECONDS = 150;
+const CONTINUATION_WINDOW_SECONDS = 30;
 
 function emit(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -468,6 +469,88 @@ async function threadTransfer(pool, encoded) {
     redactedAssignment.claimToken = nextClaimToken;
     await client.query('COMMIT');
     emit({ ok: true, operation: 'thread-transfer', assignment: redactedAssignment });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function managedContinuation(pool, encoded) {
+  const payload = decodeDecision(encoded);
+  const claimOwner = validateManagedClaimPayload(payload);
+  const text = validateText(payload.text, 'text', 100000);
+  const bootConversationId = validateText(payload.bootConversationId, 'boot_conversation_id', 512);
+  const mainSessionKey = validateText(payload.mainSessionKey, 'main_session_key', 512);
+  if (!/^agent:[A-Za-z0-9][A-Za-z0-9._-]*:boot$/.test(bootConversationId)) {
+    throw new Error('invalid_boot_conversation_id');
+  }
+  if (mainSessionKey !== `${bootConversationId.slice(0, -4)}main`) {
+    throw new Error('invalid_main_session_key');
+  }
+  if (!claimOwner.startsWith('openclaw-run:')) throw new Error('invalid_continuation_claim_owner');
+  assertNoForbiddenScope([text]);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { personId } = await managedBinding(client);
+    const candidates = await client.query(
+      `SELECT b.id
+       FROM brad_managed_kimi_inbound b
+       JOIN brad_agent_jobs j ON j.id = b.executive_job_id AND j.person_id = b.person_id
+       JOIN brad_agent_threads t ON t.id = b.thread_id AND t.person_id = b.person_id
+       JOIN brad_objectives o ON o.id = b.objective_id AND o.person_id = b.person_id
+       WHERE b.person_id = $1
+         AND b.channel = 'KIMI'
+         AND b.conversation_id = $2
+         AND b.external_message_id LIKE 'openclaw-run:boot-%'
+         AND b.content_digest = $3
+         AND b.status = 'CLAIMED'
+         AND b.claim_owner LIKE 'openclaw-run:boot-%'
+         AND b.claim_expires_at > now()
+         AND b.created_at >= now() - ($4 || ' seconds')::interval
+         AND j.status = 'WAITING' AND j.last_error = 'WAITING_MANAGED_KIMI_REPLY'
+         AND t.status = 'WAITING' AND t.phase = 'WAITING_MANAGED_KIMI'
+         AND o.status IN ('RUNNING','WAITING')
+       ORDER BY b.created_at DESC
+       FOR UPDATE OF b, j, t, o`,
+      [personId, bootConversationId, digest(text), String(CONTINUATION_WINDOW_SECONDS)]
+    );
+    if (candidates.rowCount === 0) {
+      await client.query('COMMIT');
+      emit({ ok: true, operation: 'continuation', assignment: null });
+      return;
+    }
+    if (candidates.rowCount !== 1) throw new Error('managed_kimi_continuation_ambiguous');
+
+    const inboundId = candidates.rows[0].id;
+    const claimToken = randomUUID();
+    const transferred = await client.query(
+      `UPDATE brad_managed_kimi_inbound
+       SET claim_token = $2, claim_owner = $3,
+           claim_expires_at = now() + ($4 || ' seconds')::interval,
+           updated_at = now()
+       WHERE id = $1 AND status = 'CLAIMED'
+       RETURNING objective_id`,
+      [inboundId, claimToken, claimOwner, String(CLAIM_TTL_SECONDS)]
+    );
+    if (transferred.rowCount !== 1) throw new Error('managed_kimi_continuation_not_transferable');
+    const objectiveUpdated = await client.query(
+      `UPDATE brad_objectives
+       SET session_key = $3, version = version + 1, updated_at = now()
+       WHERE person_id = $1 AND id = $2 AND status IN ('RUNNING','WAITING')`,
+      [personId, transferred.rows[0].objective_id, mainSessionKey]
+    );
+    if (objectiveUpdated.rowCount !== 1) throw new Error('managed_kimi_continuation_objective_missing');
+    const assignment = await loadManagedAssignment(client, inboundId, claimToken);
+    if (!assignment) throw new Error('managed_kimi_assignment_missing');
+    const redactedAssignment = redactValue(assignment);
+    delete redactedAssignment.claim_token;
+    redactedAssignment.claimToken = claimToken;
+    await client.query('COMMIT');
+    emit({ ok: true, operation: 'continuation', assignment: redactedAssignment });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -1132,12 +1215,12 @@ async function main() {
   const parts = rawCommand.split(/\s+/).filter(Boolean);
   const operation = parts[0];
   const argument = parts[1];
-  const allowed = ['health', 'pull', 'decide', 'receipt', 'intake', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'];
+  const allowed = ['health', 'pull', 'decide', 'receipt', 'intake', 'continuation', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'];
   if (!operation || parts.length > 2 || !allowed.includes(operation)) {
     reject('command_not_allowed');
     return;
   }
-  const requiresArgument = ['decide', 'receipt', 'intake', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'].includes(operation);
+  const requiresArgument = ['decide', 'receipt', 'intake', 'continuation', 'thread-pull', 'thread-transfer', 'thread-renew', 'thread-reply', 'thread-delivery', 'thread-status', 'recover'].includes(operation);
   if (requiresArgument !== Boolean(argument)) {
     reject('invalid_arguments');
     return;
@@ -1150,6 +1233,7 @@ async function main() {
     if (operation === 'decide') await decide(pool, argument);
     if (operation === 'receipt') await receipt(pool, argument);
     if (operation === 'intake') await intake(pool, argument);
+    if (operation === 'continuation') await managedContinuation(pool, argument);
     if (operation === 'thread-pull') await threadPull(pool, argument, false);
     if (operation === 'thread-transfer') await threadTransfer(pool, argument);
     if (operation === 'thread-renew') await threadRenew(pool, argument);

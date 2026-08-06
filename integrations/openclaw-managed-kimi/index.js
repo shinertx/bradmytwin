@@ -568,7 +568,7 @@ export function createManagedKimiPlugin(options = {}) {
         });
       };
 
-      const joinManagedContinuation = (event, ctx, runId) => {
+      const joinManagedContinuation = async (event, ctx, runId) => {
         const sessionKey = boundedContextValue([ctx?.sessionKey], 512);
         if (sessionKey !== managedMainSessionKey) return null;
         if (event?.senderIsOwner !== false) return null;
@@ -584,20 +584,47 @@ export function createManagedKimiPlugin(options = {}) {
           && state.createdAt >= cutoff
         ));
         const candidates = baseCandidates.filter((state) => state.promptDigest === digest);
-        if (candidates.length !== 1 && !continuationDiagnosticLogged) {
+        if (candidates.length === 1) {
+          const state = candidates[0];
+          state.activeRunId = runId;
+          state.sessionKey = sessionKey;
+          state.sessionKeys.add(sessionKey);
+          state.continuationJoinedAt = now();
+          runStates.set(runId, state);
+          return state;
+        }
+
+        const result = await callGateway('continuation', {
+          claimOwner: `openclaw-run:${runId}`,
+          text: normalizedString(event?.prompt),
+          bootConversationId: managedBootSessionKey,
+          mainSessionKey: managedMainSessionKey
+        });
+        if (result?.assignment) {
+          const assignment = validateRecoveryAssignment(result);
+          if (
+            assignment.sessionKey !== managedMainSessionKey
+            || assignment.channel !== 'KIMI'
+            || assignment.conversationId !== managedBootSessionKey
+          ) throw new Error('managed_kimi_continuation_assignment_mismatch');
+          return activateClaim(runId, Object.freeze({
+            inboundId: assignment.inboundId,
+            claimToken: assignment.claimToken,
+            jobId: assignment.jobId,
+            threadId: assignment.threadId,
+            objectiveId: assignment.objectiveId,
+            claimOwner: `openclaw-run:${runId}`,
+            sessionKey: managedMainSessionKey,
+            promptDigest: digest
+          }));
+        }
+        if (!continuationDiagnosticLogged) {
           api.logger?.warn?.(
             `Brad managed continuation not joined: candidate_count=${baseCandidates.length} prompt_match=${baseCandidates.some((state) => state.promptDigest === digest)}`
           );
           continuationDiagnosticLogged = true;
         }
-        if (candidates.length !== 1) return null;
-        const state = candidates[0];
-        state.activeRunId = runId;
-        state.sessionKey = sessionKey;
-        state.sessionKeys.add(sessionKey);
-        state.continuationJoinedAt = now();
-        runStates.set(runId, state);
-        return state;
+        return null;
       };
 
       const claimRun = async (event, ctx) => {
@@ -608,7 +635,7 @@ export function createManagedKimiPlugin(options = {}) {
         if (existing?.status === 'claiming') return existing.promise;
         if (existing) throw new Error('managed_kimi_run_not_claimable');
 
-        const continuation = joinManagedContinuation(event, ctx, runId);
+        const continuation = await joinManagedContinuation(event, ctx, runId);
         if (continuation) return continuation;
 
         const packet = parseRecoveryPacket(event?.prompt);
